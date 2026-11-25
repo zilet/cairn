@@ -532,6 +532,86 @@ function painTouches(date: string): (name: string, group: string | null) => bool
   };
 }
 
+// A lift the athlete's plan lost FOR PAIN or an injury is never offered back by coverage:
+// returning it is the pain-adaptation restore path's job (autonomy-service.ts
+// returnPainAdaptations: back by itself once that pain settles, kept as adapted while it
+// is open or untied, asked only on the clinician floor). The one source is the
+// ledger of what LANDED: an applied plan proposal whose change removed the lift (`remove`,
+// or the `from` of a swap) with a pain tie on it - the change's own reason_provenance
+// pointing at a symptom/pain/injury, pain words in its reason (or in the proposal's own
+// summary/rationale), the proposal's server-stamped clinical_provenance, or a clinical hold
+// on its decision - plus a scoped plan adaptation (any state but undone) whose reason says
+// pain. (The same tests plan-adaptations.ts adaptationRestoreNeedsAsk applies.) No removal
+// carries a symptom-event link, so the symptom table alone cannot say WHY a lift left; a
+// resolved symptom in the area proves nothing about a lift dropped for another reason.
+// Fails closed: a read that throws throws (the pass is unavailable), and an applied row
+// whose JSON cannot be parsed counts against any lift whose name its raw text carries.
+const PAIN_PROVENANCE = /symptom|pain|injur/i;
+const PAIN_WORDS = /\b(pain|painful|hurts?|hurting|injur(?:y|ed|ies))\b/i;
+
+function changeTiedToPain(change: any): boolean {
+  const p = change?.reason_provenance;
+  if (p && typeof p === "object" && (PAIN_PROVENANCE.test(String(p.source_ref_type ?? "")) || PAIN_PROVENANCE.test(String(p.reason_code ?? "")))) {
+    return true;
+  }
+  return PAIN_WORDS.test(String(change?.reason ?? ""));
+}
+
+function decisionClinical(proposalId: number): boolean {
+  const rows = db
+    .prepare(`SELECT risk_class, autonomy_tier, context_json FROM brain_decisions WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ?`)
+    .all(String(proposalId)) as any[];
+  return rows.some((row) => {
+    if (row.risk_class === "clinical" || row.autonomy_tier === "clinician") return true;
+    if (!row.context_json) return false;
+    const context = JSON.parse(String(row.context_json)) ?? {};
+    return context.clinical === true || context.review_reason_code === "clinical_ceiling";
+  });
+}
+
+function droppedForPainReader(): (name: string) => boolean {
+  const named = new Set<string>();
+  const raw: string[] = [];
+  const candidates = (
+    db.prepare(`SELECT id, parsed_json FROM plan_proposals WHERE status = 'applied' AND parsed_json IS NOT NULL`).all() as any[]
+  ).filter((row) => /remove|swap/.test(String(row.parsed_json)));
+  for (const row of candidates) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(String(row.parsed_json));
+    } catch {
+      raw.push(String(row.parsed_json).toLowerCase());
+      continue;
+    }
+    const changes = (Array.isArray(parsed?.changes) ? parsed.changes : []).filter(
+      (c: any) => c && (c.remove === true || (c.swap && typeof c.swap === "object" && c.swap.from))
+    );
+    let proposalPain: boolean | null = null;
+    for (const change of changes) {
+      if (!changeTiedToPain(change)) {
+        proposalPain ??=
+          (parsed?.clinical_provenance != null && typeof parsed.clinical_provenance === "object") ||
+          PAIN_WORDS.test(String(parsed?.summary ?? "")) ||
+          PAIN_WORDS.test(String(parsed?.rationale ?? "")) ||
+          decisionClinical(Number(row.id));
+        if (!proposalPain) continue;
+      }
+      const dropped = change.remove === true ? change.exercise : change.swap?.from;
+      if (dropped) named.add(liftIdentity(String(dropped)));
+    }
+  }
+  for (const row of db
+    .prepare(`SELECT exercise, reason FROM plan_adaptations WHERE status != 'cancelled' AND kind IN ('removed','swapped')`)
+    .all() as any[]) {
+    if (PAIN_WORDS.test(String(row.reason ?? ""))) named.add(liftIdentity(String(row.exercise)));
+  }
+  return (name: string) => {
+    if (named.has(liftIdentity(name))) return true;
+    const lower = name.toLowerCase();
+    return raw.some((text) => text.includes(lower));
+  };
+}
+
 function numberWord(n: number): string {
   return ["zero", "one", "two", "three", "four", "five"][n] ?? String(n);
 }
@@ -678,15 +758,19 @@ export function coverageRemedy(
     return String(day?.name ?? "").trim() || `day ${n}`;
   };
   let known: ReturnType<typeof knownLifts> | null = null;
+  let droppedForPain: ((name: string) => boolean) | null = null;
 
   // ONE new lift for this gap, on the lightest day whose press angle is free.
   const placeOne = (fits: (c: Candidate) => boolean, reason: string): CoverageChange | null => {
     known ??= knownLifts().filter((lift) => lift.mode !== "timed" && !TIMED_NAME.test(lift.name));
+    const painDropped = (droppedForPain ??= droppedForPainReader());
     const order = days
       .map((day) => Number(day.day_number))
       .sort((a, b) => (daySets.get(a) ?? 0) - (daySets.get(b) ?? 0) || a - b);
     for (const candidate of known) {
       if (isOnPlan(candidate.name) || !fits(candidate) || untouchable(candidate.name, candidate.group)) continue;
+      // Dropped for pain: coming back is the pain-adaptation restore's call, never coverage's.
+      if (painDropped(candidate.name)) continue;
       const slot = pressSlotKey(candidate.name);
       const day = order.find((n) => {
         const names = strengthItems(days.find((d) => Number(d.day_number) === n)).map((i: any) => String(i.exercise));

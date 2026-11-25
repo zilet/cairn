@@ -1,7 +1,9 @@
 // ---------- an asked return never re-asks ----------
-// A race adaptation made around pain does not come back by itself: its end is ASKED
-// (plan-adaptations.ts `asked`, a held draft the athlete answers — autonomy-service's
-// askForAdaptationRestore). Left there, an unanswered ask sat in "Waiting on you" for as
+// A race adaptation on the clinician floor (the server's own clinical marks) does not
+// come back by itself: its end is ASKED (plan-adaptations.ts `asked`, a held draft the
+// athlete answers — autonomy-service's askForAdaptationRestore). One made around pain
+// alone is never asked: it comes back through autonomy once that pain has settled
+// (autonomy-service.ts returnPainAdaptations). Left there, an unanswered ask sat in "Waiting on you" for as
 // long as nobody tapped it, and a policy re-read could put the same question back up as
 // a fresh hold. So an ask has a life of its own, and a short one:
 //

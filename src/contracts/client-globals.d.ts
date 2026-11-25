@@ -5566,7 +5566,7 @@ declare global {
       distinctLine(candidate: unknown, ...shown: unknown[]): string;
       updatedHtml(read: Partial<ClientDayRead> | null | undefined, kind: string, isToday?: boolean): string;
       updatedInnerHtml(read: Partial<ClientDayRead> | null | undefined, kind: string, isToday?: boolean): string;
-      checkinSlotHtml(kind: string, isToday: boolean): string;
+      checkinSlotHtml(kind: string, isToday: boolean, read?: Partial<ClientDayRead> | null): string;
       overriddenMornings(read: Partial<ClientDayRead> | null | undefined): number;
       planDayLabel(name: unknown): string;
       materiallyDiffers(

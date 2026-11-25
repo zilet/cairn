@@ -2030,6 +2030,15 @@ function computeDayRead(
     // one-line `text`), so the Brief can speak to LAST NIGHT, not just the window.
     // null when the most recent night is too old to be "last night" (see above).
     last_night: lastNight,
+    // True when the watch has already said something about LAST NIGHT (sleep or HRV,
+    // both wake-dated, judged by the one `isLastNight` rule). The Brief uses it to
+    // stop pushing the morning check-in: a body that is already measured is not asked.
+    wearable_last_night:
+      !!lastNight ||
+      // `!= null` first: Number(null) is 0, finite, and an absent HRV is no reading.
+      (isLastNight(rec?.quality?.hrv_ms?.latest_date ?? null, d) &&
+        rec?.recovery?.hrv_ms != null &&
+        Number.isFinite(Number(rec.recovery.hrv_ms))),
     logged_today: {
       sets: todaysSetCount,
       activities: todaysActivities.map((a) => ({

@@ -2,22 +2,23 @@
 // src/contracts/brief-asks.ts). Pull, never push: a question waits on the Brief, and
 // each is asked at most once.
 //
-//   - TRIP EVE. The evening before a planned lift day that falls inside a trip (a `trip`
-//     context event, src/repo/travel-days.ts), the Brief asks "Lifting on the trip?".
-//     The answers write through paths that already exist:
-//       yes    → nothing changes; the answer is remembered so it is never asked again;
-//       skip   → the day is held as rest the way a rest trade holds one (a context event
-//                carrying `meta.claims_day` on that date — signal-state's own claim), the
-//                plan's ring untouched;
-//       easier → a ONE-DAY plan adaptation (a draft whose changes carry `until` = that
-//                date and `layer: 'trip'`, landed through applyProposal): each lift with
-//                a bodyweight twin becomes it (in a bodyweight rep range), the rest stay
-//                a set lighter, and the day after the plan goes back by itself
-//                (plan-adaptations.ts). A LAYER: it lies over whatever the slot holds —
-//                a race adaptation stays in force beneath it, and is what comes back.
-//     Every answer is remembered on the trip, per day (`meta.lift_answers`).
-//   - AN ASKED RETURN, ONCE. A race adaptation made around pain whose return went
-//     unanswered comes back on the one day the daily pass stamped it for
+//   - THE TRIP DAY IS NO LONGER ASKED. A planned lift day inside a trip (a `trip`
+//     context event, src/repo/travel-days.ts) gets the lighter trip version laid down by
+//     the coach the day before (routeTripVersions): a ONE-DAY plan adaptation (changes
+//     carrying `until` = that date and `layer: 'trip'`) — each lift with a bodyweight
+//     twin becomes it (in a bodyweight rep range), the rest stay a set lighter, and the
+//     day after the plan goes back by itself (plan-adaptations.ts). A LAYER: it lies
+//     over whatever the slot holds — a race adaptation stays in force beneath it. It
+//     rides the ordinary autonomy path with the server-owned Undo; the Undo is "as
+//     planned", remembered on the trip (`meta.lift_defaults`), never offered again.
+//     An older client may still answer the retired "Lifting on the trip?" card
+//     (`trip_lift:<date>`): yes / skip / easier still write through the paths they always
+//     did, and where the coach already laid the trip version down they answer IT (yes
+//     and skip undo it first; easier keeps it).
+//   - AN ASKED RETURN, ONCE — only where the clinician floor holds it. A race adaptation
+//     made around pain comes back by itself once that pain has settled
+//     (autonomy-service.ts returnPainAdaptations); one the server marked clinical still
+//     asks, and comes back on the one day the daily pass stamped it for
 //     (src/repo/plan-adaptation-asks.ts) — "bring it back" applies the held draft,
 //     "keep it" discards it; unanswered, it settles to keeping the adaptation.
 //
@@ -29,6 +30,7 @@ import type {
   BriefAskAnswerResult,
   BriefAsks,
 } from "../../contracts/brief-asks.js";
+import { db } from "../../db.js";
 import { addDaysISO, isoDate, isoDay } from "../../lib/dates.js";
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import { invalidateDayRead } from "../../repo/day-read-cache.js";
@@ -41,15 +43,25 @@ import {
 import { listWords } from "../../repo/plan-adaptations.js";
 import { getPlan } from "../../repo/plan.js";
 import { isoDow, WEEKDAY_NAMES } from "../../repo/profile.js";
-import { applyProposal, createProposal, proposalStatus, setProposalStatus } from "../../repo/proposals.js";
-import { localDateISO, nowContext } from "../../repo/shared.js";
-import { recordTripLiftAnswer, tripEventOn, type TripEvent } from "../../repo/travel-days.js";
-import { applyAnsweredProposal } from "../brain/autonomy-service.js";
+import {
+  applyProposal,
+  createProposal,
+  getProposal,
+  listProposals,
+  proposalStatus,
+  setProposalStatus,
+} from "../../repo/proposals.js";
+import { localDateISO } from "../../repo/shared.js";
+import { recordTripLiftAnswer, recordTripLiftDefault, tripEventOn } from "../../repo/travel-days.js";
+import {
+  TRIP_VERSION_AGENT,
+  tripIsBounded,
+  tripVersionDate,
+  tripVersionWrittenFor,
+} from "../../repo/trip-version.js";
+import { applyAnsweredProposal, applyProposalWithAutonomy, revertDecision } from "../brain/autonomy-service.js";
 import { lookAheadWeekAsOf } from "../training/plan-look-ahead.js";
 import { planWeek, type PlanWeekPlanDay } from "../training/plan-week.js";
-
-/** From this local hour the Brief reads as the evening before tomorrow. */
-export const TRIP_EVE_HOUR = 16;
 
 const TRIP_ASK_PREFIX = "trip_lift:";
 const RETURN_ASK_PREFIX = "adaptation_return:";
@@ -71,12 +83,6 @@ function weekdayName(date: string): string {
   return WEEKDAY_NAMES[isoDow(date)] ?? "Tomorrow";
 }
 
-function tripWords(trip: TripEvent): string {
-  return trip.location && !trip.title.toLowerCase().includes(trip.location.toLowerCase())
-    ? `${trip.title} in ${trip.location}`
-    : trip.title;
-}
-
 /** The plan strip's lift on `date` (the same cell the week strip prints), or null. */
 function plannedLiftOn(date: string, today: string): PlanWeekPlanDay | null {
   const week = safe(() => planWeek(lookAheadWeekAsOf(date, today)), null);
@@ -86,7 +92,10 @@ function plannedLiftOn(date: string, today: string): PlanWeekPlanDay | null {
   return plan;
 }
 
-/** A context event already holds `date` as rest (a rest trade, an earlier "skip it"). */
+/**
+ * A context event already holds `date` as rest (a rest trade, an earlier "skip it"). A
+ * calendar that cannot be read answers yes: nothing is laid over a day nobody can see.
+ */
 function dayAlreadyHeld(date: string): boolean {
   return safe(
     () =>
@@ -98,44 +107,8 @@ function dayAlreadyHeld(date: string): boolean {
           String(e.start_date ?? "").slice(0, 10) <= date &&
           String(e.end_date ?? e.start_date ?? "").slice(0, 10) >= date
       ),
-    false
+    true
   );
-}
-
-const TRIP_DETAIL: readonly ((day: string, lift: string, trip: string) => string)[] = [
-  (day, lift, trip) => `${day}'s ${lift} lands on your ${trip} trip.`,
-  (day, lift, trip) => `${lift} is planned for ${day}, the ${trip} trip.`,
-];
-
-const TRIP_ANSWERS: readonly BriefAskAnswer[] = [
-  { key: "yes", label: "Yes, as planned" },
-  { key: "easier", label: "Easier — bodyweight" },
-  { key: "skip", label: "Skip it" },
-];
-
-/** The trip-eve question for tomorrow, or null (not the evening, no trip, no lift, already answered). */
-export function tripEveAsk(today: string, hour: number): BriefAsk | null {
-  if (!(hour >= TRIP_EVE_HOUR)) return null;
-  const tomorrow = addDaysISO(today, 1);
-  if (!tomorrow) return null;
-  const trip = safe(() => tripEventOn(tomorrow), null);
-  if (!trip || trip.lift_answers[tomorrow]) return null;
-  const lift = plannedLiftOn(tomorrow, today);
-  if (!lift) return null;
-  if (dayAlreadyHeld(tomorrow)) return null;
-  const detail = pickDayVariant(TRIP_DETAIL, today, "brief-ask:trip")(
-    weekdayName(tomorrow),
-    lift.name,
-    tripWords(trip)
-  );
-  return {
-    key: `${TRIP_ASK_PREFIX}${tomorrow}`,
-    kind: "trip_lift",
-    question: "Lifting on the trip?",
-    detail,
-    date: tomorrow,
-    answers: [...TRIP_ANSWERS],
-  };
 }
 
 const RETURN_ANSWERS: readonly BriefAskAnswer[] = [
@@ -154,18 +127,157 @@ function returnAsks(today: string): BriefAsk[] {
   }));
 }
 
-/** Today's quiet questions. `now` places the evening, read in the athlete's device zone. */
+/**
+ * Today's quiet questions. The trip eve no longer asks: the coach lays the lighter trip
+ * version down by itself (routeTripVersions), and its Undo is the "as planned". What is
+ * left is the asked return of an adaptation the clinician floor holds. `now` is accepted
+ * for older callers and no longer read.
+ */
 export function briefAsks(opts: { date?: string; now?: Date } = {}): BriefAsks {
   const today = dayKey(opts.date) ?? localDateISO();
-  // The device zone's hour (nowContext), never the host clock's: a UTC Pi must not ask a
-  // Pacific athlete in their morning and stay silent all their evening.
-  const hour = nowContext(opts.now ?? new Date()).hour;
-  const asks: BriefAsk[] = [];
-  const trip = tripEveAsk(today, hour);
-  if (trip) asks.push(trip);
-  asks.push(...returnAsks(today));
-  return { date: today, asks };
+  return { date: today, asks: [...returnAsks(today)] };
 }
+
+// ---------- the trip version, laid down by the coach ----------
+
+function tripVersionWords(
+  lift: PlanWeekPlanDay,
+  date: string,
+  changes: readonly any[]
+): { summary: string; rationale: string } {
+  const day = weekdayName(date);
+  const swapped = changes.filter((c) => c?.swap?.from).map((c) => String(c.swap.from));
+  const summary = `${lift.name}, lighter on the trip — ${day} only.`;
+  const lead = pickDayVariant(TRIP_VERSION_WHY, date, "trip-version:why")(day);
+  const what = swapped.length
+    ? ` ${listWords(swapped)} ${swapped.length === 1 ? "goes" : "go"} bodyweight; the rest is a set lighter where there's room.`
+    : " Each lift is a set lighter where there's room.";
+  return { summary, rationale: `${lead}${what} Undo keeps the day as planned.` };
+}
+
+const TRIP_VERSION_WHY: readonly ((day: string) => string)[] = [
+  (day) => `${day} falls on your trip, so the lifting travels light and the plan comes back the day after.`,
+  (day) => `You're away ${day}, so that lift day is the version a hotel room holds; the plan returns the day after.`,
+  (day) => `${day} is a trip day: a lighter version of the lift, and the regular plan is back the next day.`,
+];
+
+export interface TripVersionOutcome {
+  /** The trip day the pass read (tomorrow), or null when there was none to read. */
+  date: string | null;
+  /** routed: a trip version went through autonomy (see `tier`); none: nothing to do;
+   *  done: the day was already handled (answered, or laid down before); unavailable: a
+   *  read failed — nothing changed. */
+  status: "routed" | "none" | "done" | "unavailable";
+  proposal_id: number | null;
+  tier: string | null;
+  /** Earlier trip versions whose day has passed, retired quietly. */
+  retired: number[];
+}
+
+// A trip version whose day has passed has nothing left to shape: a held one (review
+// posture) or one that never landed is retired quietly, with its holds.
+function retirePassedTripVersions(today: string): number[] {
+  const retired: number[] = [];
+  for (const proposal of safe(() => listProposals(50) as any[], [])) {
+    if (proposal?.status !== "draft" || String(proposal?.agent ?? "") !== TRIP_VERSION_AGENT) continue;
+    const date = tripVersionDate(proposal.parsed);
+    if (!date || date >= today) continue;
+    safe(() => setProposalStatus(Number(proposal.id), "superseded", { recordDecision: false }), null);
+    retired.push(Number(proposal.id));
+  }
+  return retired;
+}
+
+/**
+ * THE TRIP DEFAULT. Tomorrow is a planned lift day inside a BOUNDED trip (both dates
+ * named, at most MAX_TRIP_VERSION_DAYS long — an undated or open-ended trip lays nothing
+ * down): the coach lays the lighter trip version over it — the exact one-day layer the
+ * "Easier" answer wrote (easierTripChanges) — and routes it through the ordinary autonomy
+ * path. It never lands before its own day: lead schedules it (pending) for that morning's
+ * boundary with the server-owned Undo once landed (it restores itself the day after),
+ * announce_first announces it for that morning, review_everything holds it for a yes.
+ * Each trip day is handled ONCE — remembered on the trip (`meta.lift_defaults`) AND by the
+ * draft itself (any status), since a trip edit can replace the trip's meta — so an Undo,
+ * a Hold or a discard is the athlete's "as planned" and it is never offered again; an
+ * athlete who already answered the retired question on an older client keeps their
+ * answer. Any read that fails changes nothing. Idempotent; run from the scheduler's tick.
+ */
+export function routeTripVersions(opts: { date?: string } = {}): TripVersionOutcome {
+  const today = dayKey(opts.date) ?? localDateISO();
+  const retired = retirePassedTripVersions(today);
+  const tomorrow = addDaysISO(today, 1);
+  const out = (status: TripVersionOutcome["status"], extra: Partial<TripVersionOutcome> = {}): TripVersionOutcome => ({
+    date: tomorrow ?? null,
+    status,
+    proposal_id: null,
+    tier: null,
+    retired,
+    ...extra,
+  });
+  if (!tomorrow) return out("none");
+  const trip = safe(() => tripEventOn(tomorrow), null);
+  if (!trip) return out("none");
+  // Only a trip that names both its days and is short (repo/trip-version.ts): an undated
+  // or open-ended one reads as covering every day, and would lighten every lift day.
+  if (!tripIsBounded(trip.start_date, trip.end_date, tomorrow)) return out("none");
+  if (trip.lift_answers[tomorrow] || trip.lift_defaults[tomorrow] != null) return out("done");
+  const written = tripVersionWrittenFor(tomorrow);
+  if (written == null) return out("unavailable");
+  if (written) return out("done");
+  // The week's cell for that day; a read that fails is not "no lift".
+  let lift: PlanWeekPlanDay | null;
+  try {
+    const week = planWeek(lookAheadWeekAsOf(tomorrow, today));
+    const cell = week?.days.find((d) => d.date === tomorrow) ?? null;
+    const plan = cell?.plan_day ?? null;
+    lift = plan && plan.role === "strength" && plan.day_type !== "rest" && !cell?.session ? plan : null;
+  } catch {
+    return out("unavailable");
+  }
+  if (!lift) return out("none");
+  if (dayAlreadyHeld(tomorrow)) return out("none");
+  let changes: any[];
+  try {
+    const day = (getPlan() as any[]).find((d) => Number(d?.day_number) === Number(lift!.day_number));
+    if (!day) return out("none");
+    changes = easierTripChanges(lift.day_number, tomorrow);
+  } catch {
+    return out("unavailable");
+  }
+  if (!changes.length) return out("none");
+  const words = tripVersionWords(lift, tomorrow, changes);
+  const proposal = createProposal(TRIP_VERSION_AGENT, `The trip version of ${lift.name} (${tomorrow})`, "", {
+    summary: words.summary,
+    rationale: words.rationale,
+    changes: changes.map((c) => ({ ...c, reason: TRIP_VERSION_REASON })),
+  }) as any;
+  const proposalId = Number(proposal?.id);
+  if (!(proposalId > 0)) return out("unavailable");
+  // Remembered BEFORE routing: whatever the routing does, this day is never offered twice.
+  recordTripLiftDefault(trip.id, tomorrow, proposalId);
+  let routed: any = null;
+  try {
+    routed = applyProposalWithAutonomy(proposalId, {});
+  } catch {
+    routed = null;
+  }
+  const acted =
+    routed?.ok === true &&
+    routed?.superseded !== true &&
+    (routed?.review_required === true || routed?.decision?.id != null);
+  if (!acted && proposalStatus(proposalId) === "draft") {
+    // Neither landed, scheduled nor held (a plan refusal, a premise gone in the same
+    // breath): nothing is left behind.
+    safe(() => setProposalStatus(proposalId, "superseded", { recordDecision: false }), null);
+  }
+  if (acted) safe(() => invalidateDayRead(tomorrow), undefined);
+  return out(acted ? "routed" : "none", {
+    proposal_id: proposalId,
+    tier: acted ? String(routed?.tier ?? routed?.decision?.autonomy_tier ?? "") || null : null,
+  });
+}
+
+const TRIP_VERSION_REASON = "A lighter, bodyweight version for one day on the trip; the plan comes back the day after.";
 
 // ---------- the bodyweight version of a lift ----------
 
@@ -276,6 +388,95 @@ export function easierTripMessage(day: string, changes: readonly any[]): string 
 
 const ASK_GONE = "That question has already been answered, so nothing changed.";
 
+function appliedDecisionFor(proposalId: number): number | null {
+  const row = safe(
+    () =>
+      db
+        .prepare(
+          `SELECT id FROM brain_decisions
+            WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ? AND status = 'applied'
+            ORDER BY id DESC LIMIT 1`
+        )
+        .get(String(proposalId)) as { id?: unknown } | undefined,
+    undefined
+  );
+  const id = Number(row?.id);
+  return id > 0 ? id : null;
+}
+
+/**
+ * An older client answered the retired trip question for a day the coach already laid
+ * the trip version over (`proposalId`). "easier" keeps (or lands) that version; "yes" and
+ * "skip" first take it back — its Undo when it landed, a discard while it waits — and
+ * then return null so the ordinary answer runs on the plan as planned. A take-back that
+ * fails changes nothing and says so. Null too when the version is already gone.
+ */
+function answerLaidTripVersion(
+  tripId: number,
+  date: string,
+  proposalId: number,
+  answer: BriefAskAnswerKey,
+  key: string
+): BriefAskAnswerResult | null {
+  const status = proposalStatus(proposalId);
+  if (status === "applied") {
+    if (answer === "easier") {
+      recordTripLiftAnswer(tripId, date, "easier");
+      return {
+        ok: true,
+        key,
+        answer,
+        proposal_id: proposalId,
+        message: `The lighter trip version is already in place for ${weekdayName(date)}. Your plan is back the day after.`,
+      };
+    }
+    const decisionId = appliedDecisionFor(proposalId);
+    const undone = decisionId ? revertDecision(decisionId, "answered: as planned") : { ok: false, error: undefined };
+    if (!undone.ok) {
+      return {
+        ok: false,
+        key,
+        error: undone.error || "The lighter trip version couldn't be taken back just now, so nothing changed.",
+      };
+    }
+    return null;
+  }
+  if (status === "draft") {
+    if (answer === "easier") {
+      // Held for a yes (review_everything): this tap IS the yes, landed the way the
+      // "Easier" answer always landed.
+      if ((getProposal(proposalId) as any)?.autonomy?.status === "review") {
+        let landed = false;
+        try {
+          applyAnsweredProposal(proposalId);
+          landed = proposalStatus(proposalId) === "applied";
+        } catch {
+          landed = false;
+        }
+        if (!landed) return { ok: false, key, error: "The lighter day couldn't be written, so nothing changed." };
+        recordTripLiftAnswer(tripId, date, "easier");
+        const changes = (getProposal(proposalId) as any)?.parsed?.changes ?? [];
+        return { ok: true, key, answer, proposal_id: proposalId, message: easierTripMessage(weekdayName(date), changes) };
+      }
+      // Already on its way: it lands the morning of the trip day, never the eve.
+      const onItsWay = ["pending", "announced"].includes(String((getProposal(proposalId) as any)?.autonomy?.status));
+      if (!onItsWay) return { ok: false, key, error: "The lighter day couldn't be written, so nothing changed." };
+      recordTripLiftAnswer(tripId, date, "easier");
+      return {
+        ok: true,
+        key,
+        answer,
+        proposal_id: proposalId,
+        message: `The lighter trip version is set for ${weekdayName(date)}. Your plan is back the day after.`,
+      };
+    }
+    // Waiting for its boundary or held for a yes: set aside, its decisions with it.
+    setProposalStatus(proposalId, "discarded");
+    return null;
+  }
+  return null;
+}
+
 function answerTrip(date: string, answer: BriefAskAnswerKey, today: string): BriefAskAnswerResult {
   const key = `${TRIP_ASK_PREFIX}${date}`;
   if (answer !== "yes" && answer !== "skip" && answer !== "easier") {
@@ -284,6 +485,13 @@ function answerTrip(date: string, answer: BriefAskAnswerKey, today: string): Bri
   const trip = safe(() => tripEventOn(date), null);
   if (!trip) return { ok: false, key, error: "There's no trip on that day any more, so nothing changed." };
   if (trip.lift_answers[date]) return { ok: false, key, error: ASK_GONE };
+  // The coach already laid the trip version down for this day: an older client's answer
+  // answers THAT change rather than writing a second one beside it.
+  const laid = trip.lift_defaults[date];
+  if (laid != null && laid > 0) {
+    const settled = answerLaidTripVersion(trip.id, date, laid, answer, key);
+    if (settled) return settled;
+  }
   const lift = plannedLiftOn(date, today);
   if (answer === "yes") {
     recordTripLiftAnswer(trip.id, date, "yes");

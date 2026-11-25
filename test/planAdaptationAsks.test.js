@@ -1,5 +1,5 @@
 // An asked return never re-asks (src/repo/plan-adaptation-asks.ts). A race adaptation
-// made around pain asks for its return; left unanswered it comes back ONCE on the Brief
+// on the clinician floor asks for its return; left unanswered it comes back ONCE on the Brief
 // (a pull item, never a notification), then settles to the safe default — the adaptation
 // stays — recorded on the rows with the reason. An answer settles the rows at once.
 import { test } from "node:test";
@@ -15,7 +15,7 @@ import {
   askedAdaptationGroups,
   settleAskedAdaptations,
 } from "../dist/repo/plan-adaptation-asks.js";
-import { awaitingBrainDecisions } from "../dist/repo/brain-decisions.js";
+import { awaitingBrainDecisions, patchBrainDecision } from "../dist/repo/brain-decisions.js";
 import { answerBriefAsk, briefAsks } from "../dist/domain/today/brief-asks.js";
 import { db, localDaysAgo, repo, savePlanDaySettled } from "./_seed.js";
 import { runWithTimeZone } from "../dist/tz.js";
@@ -56,6 +56,12 @@ function askedReturn() {
     ],
   });
   assert.equal(repo.applyProposal(Number(proposal.id)).ok, true);
+  // On the clinician floor: the one return that is still asked (a change made around
+  // pain alone comes back by itself once the pain settles — painAdaptationReturn.test.js).
+  const made = repo
+    .listBrainDecisions({ limit: 50 })
+    .find((row) => row.source_ref_type === "plan_proposal" && row.source_ref_key === String(proposal.id));
+  patchBrainDecision(made.id, { risk_class: "clinical" });
   const outcome = expirePlanAdaptations(DAY_AFTER);
   assert.equal(outcome.asked.length, 1);
   assert.ok(outcome.ask, "the return is asked");
@@ -80,6 +86,11 @@ test("an unanswered ask comes back once on the Brief, then settles to keeping th
   assert.deepEqual(settleAskedAdaptations(resurface).resurfaced, [proposalId]);
   const onBrief = briefAsks({ date: resurface, now: MORNING }).asks;
   assert.equal(onBrief.length, 1);
+  assert.equal(
+    awaitingBrainDecisions().some((d) => String(d.summary ?? "").includes("Back Squat")),
+    false,
+    "asked in one place only: the Brief, never also in Waiting on you"
+  );
   assert.equal(onBrief[0].kind, "adaptation_return");
   assert.equal(onBrief[0].key, `adaptation_return:${proposalId}`);
   assert.match(onBrief[0].question, /bring Back Squat back to the regular plan\?/);

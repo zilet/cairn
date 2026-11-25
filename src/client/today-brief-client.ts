@@ -409,11 +409,11 @@ type TodayBriefHtmlOptions = {
   // is. It is a mount, not a prompt — `loadCheckin` (capture.ts) fills it only when
   // nothing is logged for the date and the athlete hasn't waved it off today, and
   // `:empty{display:none}` keeps it invisible until then. A train/done read gets
-  // nothing: the day already has its answer.
-  function todayBriefCheckinSlotHtml(kind: string, isToday: boolean): string {
-    if (!isToday) return "";
-    if (kind !== "rest" && kind !== "easy") return "";
-    return `<div id="checkinSlot" class="checkin-slot brief-checkin"></div>`;
+  // nothing. `signals.wearable_last_night` (server freshness rule) mounts it `data-quiet`.
+  function todayBriefCheckinSlotHtml(kind: string, isToday: boolean, read?: TodayBriefRead | null): string {
+    if (!isToday || (kind !== "rest" && kind !== "easy")) return "";
+    const quiet = (read?.signals as Record<string, unknown> | undefined)?.wearable_last_night === true ? ` data-quiet="1"` : "";
+    return `<div id="checkinSlot" class="checkin-slot brief-checkin"${quiet}></div>`;
   }
 
   // How many recent quiet mornings the athlete trained through with nothing saying it
@@ -500,7 +500,7 @@ type TodayBriefHtmlOptions = {
     const reason = todayBriefReasonHtml(read, kind);
     const lookBack = todayBriefLookBackHtml(read, options.isToday !== false);
 
-    const checkinSlot = todayBriefCheckinSlotHtml(kind, options.isToday !== false);
+    const checkinSlot = todayBriefCheckinSlotHtml(kind, options.isToday !== false, read);
     // The athlete's own recent pattern, read back to them as the default. Two quiet
     // mornings trained through with nothing saying it cost them, and "Train anyway"
     // is no longer the honest name for the tap — the plan day is (label and order only).

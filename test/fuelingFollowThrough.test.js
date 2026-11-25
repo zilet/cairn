@@ -229,6 +229,10 @@ test("the fueling follow-up is on the agenda when due and drops off once answere
     );
 
   assert.equal(onAgenda(repo.todayAgenda(TODAY)), true, "due → the fueling-followup candidate is on the agenda");
+  // Today does not ask it: the read waits behind "more" for a person who wants to answer.
+  const due = repo.todayAgenda(TODAY);
+  assert.ok(!due.primary.some((c) => c.id === "fueling-followup"), "never raised inline, even alone on a quiet day");
+  assert.equal(due.more.find((c) => c.id === "fueling-followup")?.pull, true);
 
   repo.setFuelingFeedback(TODAY, { energy: 2 });
   assert.equal(onAgenda(repo.todayAgenda(TODAY)), false, "answered → gone on the next render");

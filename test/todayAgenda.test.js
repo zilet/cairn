@@ -31,6 +31,8 @@ import {
 import { todayRouter } from "../dist/routes/today.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { runWithTimeZone } from "../dist/tz.js";
+import { awaitingBrainDecisions, patchBrainDecision } from "../dist/repo/brain-decisions.js";
+import { measurementRequestCandidate } from "../dist/repo/measurement-request.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
 // arbiter sees exactly (and only) what each test seeds.
@@ -725,7 +727,7 @@ test("health attention never appears on a historical Today date", () => {
   assert.ok(![...agenda.primary, ...agenda.more].some((item) => item.id === "health-focus"));
 });
 
-function seedFastLossEpisode({ lifts = 3, intakeDays = 14 } = {}) {
+function seedFastLossEpisode({ lifts = 3, intakeDays = 14, slide = false } = {}) {
   repo.setProfile({
     age: 44,
     height_cm: 178,
@@ -742,8 +744,10 @@ function seedFastLossEpisode({ lifts = 3, intakeDays = 14 } = {}) {
   });
   const names = ["Back Squat", "Bench Press", "Barbell Row"].slice(0, lifts);
   for (const name of names) {
-    [27, 20, 13, 6, 1].forEach((daysAgo) => {
-      repo.logSetByName({ exercise: name, weight: 185, reps: 5, rir: 3, date: localDaysAgo(daysAgo) });
+    [27, 20, 13, 6, 1].forEach((daysAgo, index) => {
+      // `slide`: every anchor loses load session over session, so the cut reads sliding.
+      const weight = slide ? 225 - index * 12 : 185;
+      repo.logSetByName({ exercise: name, weight, reps: 5, rir: 3, date: localDaysAgo(daysAgo) });
     });
   }
 }
@@ -764,7 +768,10 @@ test("robust fast loss competes in Today's attention budget and opens Energy Bal
   assert.equal(card.action?.kind, "progress-energy");
   assert.match(card.title, /faster than the muscle-preserving band/i);
   assert.match(card.body, /strength is holding/i);
-  assert.ok(card.tier === "primary" || card.tier === "more", "the shared salience arbiter owns placement");
+  // Strength holding: a read worth having, not news for today — it waits behind "more".
+  assert.equal(card.tier, "more");
+  assert.equal(card.pull, true);
+  assert.ok(!repo.todayAgenda().primary.some((item) => item.id === "fast-loss-attention"));
 
   const historical = repo.todayAgenda("2026-01-07");
   assert.ok(![...historical.primary, ...historical.more].some((item) => item.id === "fast-loss-attention"));
@@ -843,10 +850,15 @@ test("fast-loss candidate reads imported metabolic RMR without materializing it 
     "ordinary goal callers retain lazy materialization",
   );
   repo.todayAgenda();
-  assert.deepEqual(
-    db.prepare("SELECT key FROM app_state ORDER BY key").all().map((row) => row.key),
-    ["today_agenda_intro"],
-    "the human pass may write only the existing Today surprise-introduction ledger"
+  // A holding-strength cut is a pull card, so nothing is introduced inline and the pass
+  // writes nothing at all; the ledger is the only key it may ever write.
+  const written = db
+    .prepare("SELECT key FROM app_state ORDER BY key")
+    .all()
+    .map((row) => row.key);
+  assert.ok(
+    written.every((key) => key === "today_agenda_intro"),
+    `the human pass may write only the existing Today surprise-introduction ledger: ${written.join(", ")}`
   );
 });
 
@@ -1082,19 +1094,24 @@ test("markIntroduced:false computes the same agenda without spending the day's a
 });
 
 test("a genuinely-new item behind the disclosure is stamped waiting; the introduced one is not", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
   seedHealthDoc("2025-12-01", [
     marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
     marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
   ]);
   repo.deriveDirectives();
+  repo.createProposal("stub", "auto: weekly review", "", { changes: [] });
   repo.addInsight({ kind: "weekly_read", text: "Solid week — held three sessions." });
 
   const a = repo.todayAgenda();
   const introduced = a.primary.find((c) => c.id === "health-focus");
-  const deferredWeekly = a.more.find((c) => c.id === "weekly-read");
+  const deferredDraft = a.more.find((c) => c.id === "draft-proposals");
+  const weekly = a.more.find((c) => c.id === "weekly-read");
   assert.ok(introduced, "the day's one newcomer is inline");
   assert.equal(introduced.waiting, undefined, "an introduced item never reads as waiting");
-  assert.equal(deferredWeekly?.waiting, true, "the deferred newcomer whispers from behind the disclosure");
+  assert.equal(deferredDraft?.waiting, true, "the deferred newcomer whispers from behind the disclosure");
+  assert.ok(weekly, "the weekly read waits behind the disclosure");
+  assert.equal(weekly.waiting, undefined, "a pull card is never budgeted, so it never whispers");
 
   // A routed historical date renders archival state — nothing waits there.
   const past = repo.todayAgenda("2026-01-07");
@@ -1239,4 +1256,184 @@ test("a genuinely new sync after an undo still reconciles (the filter is per act
   const stillUnreconciled = repo.listUnreconciledGarminStrength();
   assert.equal(stillUnreconciled.length, 1, "only the undone activity stays behind");
   assert.equal(stillUnreconciled[0].external_id, "ext-undone", "and it is the one the athlete put back");
+});
+
+// ---- the needs-your-decision card: only what genuinely needs the person today ----
+// A plan redraw whose weekly volume floor its verify pass could not repair is held with
+// `safety_floor` (coachOps/training.ts volumeFloorAutonomy). That hold waits on the
+// "Waiting on you" list with its own sentence; Today does not raise it. The discriminator
+// is the stamped `volume_floor_unresolved` finding, never the bare reason code.
+function redrawHeldForVolumeFloor({ unresolved = ["chest would sit at 4 of its 10 weekly working sets"] } = {}) {
+  const proposal = repo.createProposal("stub", "auto: plan redraw", "", {
+    summary: "Next week's plan, redrawn",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", sets: 2 }],
+    ...(unresolved ? { volume_floor_unresolved: unresolved } : {}),
+  });
+  const held = applyProposalWithAutonomy(proposal.id, { clamp_refused: true });
+  return { proposal, held };
+}
+
+test("a redraw's volume-floor hold waits on the list, not on Today, under coach-led postures", () => {
+  for (const lead_mode of ["lead", "announce_first"]) {
+    repo.setSettings({ lead_mode });
+    const { proposal, held } = redrawHeldForVolumeFloor();
+    assert.equal(held.review_reason_code, "safety_floor", "precondition: the floor holds it for a yes");
+    assert.equal(repo.getProposal(proposal.id).autonomy?.status, "review");
+
+    assert.equal(agendaDraftCandidate(), undefined, `${lead_mode}: no NEEDS YOUR DECISION card for a volume floor`);
+    assert.ok(
+      !repo.listAttentionReviewHeldProposals(8).some((p) => Number(p.id) === Number(proposal.id)),
+      "the bounded SQL reader leaves it out too, so it can never crowd a real ask"
+    );
+    const waiting = awaitingBrainDecisions().find((row) => row.id === Number(held.decision.id));
+    assert.ok(waiting, "it stays reachable on the waiting list");
+    assert.equal(waiting.for_clinician, false, "as the person's own question");
+    assert.match(waiting.explanation, /weekly set floor/);
+    resetTables("plan_proposals", "brain_decisions", "brain_expectations", "brain_evaluations", "app_state");
+  }
+});
+
+test("a refused safety floor WITHOUT a redraw's volume finding still reaches Today", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const { held } = redrawHeldForVolumeFloor({ unresolved: null });
+  assert.equal(held.review_reason_code, "safety_floor");
+  const draft = agendaDraftCandidate();
+  assert.ok(draft, "only the volume-floor redraw is held back; another refused floor is still asked");
+  assert.equal(draft.kicker, "NEEDS YOUR DECISION");
+});
+
+test("review-everything keeps a volume-floor redraw in its review queue", () => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  redrawHeldForVolumeFloor();
+  assert.ok(agendaDraftCandidate(), "the person asked to review everything, so it stays");
+});
+
+test("a clinician hold never makes a Today decision card; it waits for the person and their doctor", () => {
+  for (const lead_mode of ["lead", "announce_first", "review_everything"]) {
+    repo.setSettings({ lead_mode });
+    const proposal = repo.createProposal("case_conference", "case conference: iron", "", {
+      kind: "nutrition_target",
+      summary: "Iron-forward meals while ferritin is low",
+      nutrition: { target_kcal: 2_250, protein_g: 170 },
+    });
+    const held = applyProposalWithAutonomy(proposal.id, { clinical: true });
+    assert.equal(held.tier, "clinician", "precondition: the clinician floor holds it");
+    assert.equal(held.review_reason_code, "clinical_ceiling");
+    // The conference writes the person a sentence on its hold (case-conference.ts).
+    patchBrainDecision(Number(held.decision.id), {
+      action: {
+        ...(held.decision.action ?? {}),
+        user_explanation: "Low ferritin is worth raising with your doctor before the food plan leans on it.",
+      },
+    });
+
+    assert.equal(agendaDraftCandidate(), undefined, `${lead_mode}: a clinician item is never a Today decision`);
+    const waiting = awaitingBrainDecisions().find((row) => row.id === Number(held.decision.id));
+    assert.ok(waiting, "it is on the waiting list");
+    assert.equal(waiting.for_clinician, true, "under the For you and your doctor mast");
+    resetTables("plan_proposals", "brain_decisions", "brain_expectations", "brain_evaluations", "app_state");
+  }
+});
+
+// ---- pull-only cards: they wait behind "more", never inline, however quiet the day ----
+test("the weekly read and a connection insight are pull: never inline, even alone", () => {
+  repo.addInsight({ kind: "weekly_read", text: "Solid week — held three sessions." });
+  repo.addInsight({ kind: "connection", text: "Your easy runs cluster after short-sleep nights." });
+  const agenda = repo.todayAgenda();
+  assert.deepEqual(agenda.primary, [], "nothing is raised inline on a day with only reads");
+  for (const id of ["weekly-read", "connection-insight"]) {
+    const card = agenda.more.find((c) => c.id === id);
+    assert.ok(card, `${id} waits behind the disclosure`);
+    assert.equal(card.pull, true);
+    assert.equal(card.waiting, undefined, "a pull card never whispers 'one new'");
+  }
+  assert.equal(repo.getAppState("today_agenda_intro"), null, "no surprise allowance is spent on a pull card");
+});
+
+test("a cut whose strength is SLIDING is news for today; it may take an inline slot", () => {
+  seedFastLossEpisode({ slide: true });
+  const card = fastLossCard();
+  assert.ok(card, "a sliding cut surfaces");
+  assert.match(card.body, /sliding/i, "precondition: the cut reads sliding");
+  assert.equal(card.pull, undefined);
+  assert.ok(
+    repo.todayAgenda().primary.some((c) => c.id === "fast-loss-attention"),
+    "and it is raised inline"
+  );
+});
+
+test("an act-now health finding may go inline; a track-only read waits behind 'more'", () => {
+  seedHealthDoc("2025-12-01", [
+    marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
+  ]);
+  repo.deriveDirectives();
+  const inline = repo.todayAgenda().primary.find((c) => c.id === "health-focus");
+  assert.ok(inline, "an act-now finding is raised inline");
+  assert.equal(inline.pull, undefined);
+
+  resetTables("health_directives", "health_documents", "app_state");
+  // A draw far older than a lipid panel stays current for: a picture from a while ago.
+  seedHealthDoc("2019-01-15", [marker("LDL-C", 190, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives();
+  assert.equal(Number(repo.healthFocus()?.act_now) || 0, 0, "precondition: nothing to act on now");
+  const agenda = repo.todayAgenda();
+  const track = agenda.more.find((c) => c.id === "health-focus");
+  assert.ok(track, "precondition: the track-only read is a candidate, and it waits behind the disclosure");
+  assert.equal(track.pull, true);
+  assert.ok(!agenda.primary.some((c) => c.id === "health-focus"));
+});
+
+test("program adjustments are pull, whatever their kind", () => {
+  repo.savePlanDay(2, "Push", "Shoulders", [
+    { exercise: "Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 20 },
+  ]);
+  repo.saveDayRead(localDaysAgo(0), { kind: "train", headline: "Train", why: "normal plan day" });
+  const agenda = repo.todayAgenda(localDaysAgo(0));
+  const card = agenda.more.find((c) => c.id === "program-adjustments");
+  assert.ok(card, "precondition: the engine has notes on this plan, and they wait behind 'more'");
+  assert.equal(card.pull, true);
+  assert.ok(!agenda.primary.some((c) => c.id === "program-adjustments"));
+});
+
+test("a weigh-in request waits behind 'more'; a lab recheck is the doctor list's, never Today's", () => {
+  repo.setProfile({
+    sex: "male",
+    age: 44,
+    height_cm: 178,
+    weight_lb: 168,
+    goal_weight_lb: 164,
+    goal_mode: "lose",
+    activity_factor: 1.5,
+  });
+  repo.logWeight(168, localDaysAgo(20));
+  const agenda = repo.todayAgenda();
+  const weighIn = agenda.more.find((c) => c.id === "measurement-request-weigh-in");
+  assert.ok(weighIn, "the weigh-in request waits behind the disclosure");
+  assert.equal(weighIn.pull, true);
+  assert.ok(!agenda.primary.some((c) => c.id.startsWith("measurement-request-")));
+  assert.equal(repo.getAttentionSchedule("measurement-request:weigh-in"), null, "waiting is not asking: no step spent");
+
+  resetTables("profile", "bodyweight_log", "attention_schedule");
+  repo.upsertAttentionSchedule({
+    signal_key: "marker:apob",
+    domain: "health",
+    tier: "active",
+    next_due: localDaysAgo(60),
+    last_checked: localDaysAgo(120),
+    reason: "a marker past its recheck window",
+    release_condition: "a new reading",
+    source: "markers",
+    state: {},
+  });
+  assert.equal(
+    measurementRequestCandidate()?.id,
+    "measurement-request-lab-recheck",
+    "precondition: the lab need is live"
+  );
+  const lab = repo.todayAgenda();
+  assert.ok(
+    ![...lab.primary, ...lab.more].some((c) => c.id === "measurement-request-lab-recheck"),
+    "a lab follow-up never reaches Today"
+  );
 });

@@ -22,8 +22,11 @@
 //     day's set against the one the change left, `day_fingerprint`): the lift stays out
 //     and the restore record says why — re-inserting it beside a rewritten day is a guess;
 //   - the change's own Undo: the row is cancelled (the Undo already put the slot back);
-//   - a change made around pain (a clinical decision, or a reason tied to a training
-//     symptom): the return is ASKED, never applied by itself (`asked`);
+//   - a change made around pain (a reason tied to a training symptom): the return waits,
+//     untouched and unasked, while that pain is open; once it has settled the return
+//     comes back through the ordinary autonomy path with its Undo (`returning`, then
+//     `restored`, or `kept` when the athlete undoes it); a clinical decision's return is
+//     still ASKED, never applied by itself (`asked`);
 //   - anything the brain did meanwhile (a progression step on a lighter taper load) does
 //     NOT win — the race was the reason for the change, and after it the regular plan
 //     returns. That is the point of scoping it.
@@ -44,13 +47,25 @@ import { db } from "../db.js";
 import { addDaysISO } from "../lib/dates.js";
 import { isPersonSuperseded, personSupersededMarker, planChangeKey } from "./plan-annotation-release.js";
 import { getEnduranceGoal } from "./profile.js";
-import { localDateISO } from "./shared.js";
+import { localDateISO, localDayOfStamp } from "./shared.js";
 
 export type PlanAdaptationKind = "updated" | "removed" | "added" | "swapped";
 // `kept`: an `asked` return that settled to the safe default — the adaptation stays as it
 // is (the athlete said keep, the ask was set aside, or it went unanswered past its window;
 // plan-adaptation-asks.ts). Terminal, with the reason in `resolution_note`.
-export type PlanAdaptationStatus = "active" | "restored" | "skipped" | "cancelled" | "superseded" | "asked" | "kept";
+// `returning`: a change made around pain whose pain has since settled, on its way back
+// through the ordinary autonomy path (a restore draft landed, scheduled, or held under the
+// review posture) — settled by autonomy-service.settleAdaptationReturns to `restored`
+// when it lands and stands, `kept` when the athlete says no (Undo, Hold, discard).
+export type PlanAdaptationStatus =
+  | "active"
+  | "restored"
+  | "skipped"
+  | "cancelled"
+  | "superseded"
+  | "asked"
+  | "kept"
+  | "returning";
 
 /** One plan item row as the adaptation stores it (no hydration, no derived fields). */
 export interface AdaptationItemRow {
@@ -593,6 +608,70 @@ export function askedPlanAdaptations(): PlanAdaptationRow[] {
 }
 
 /**
+ * The return of these rows (made around pain, the pain since settled) was routed through
+ * autonomy as the restore draft behind decision `decisionId`: they leave `active` so no
+ * later pass routes a second one beside it.
+ */
+export function markPlanAdaptationsReturning(ids: number[], decisionId: number | null, note: string): void {
+  const update = db.prepare(
+    `UPDATE plan_adaptations
+        SET status = 'returning', resolution_note = ?, resolved_at = datetime('now'),
+            restore_decision_id = COALESCE(?, restore_decision_id)
+      WHERE id = ? AND status = 'active'`
+  );
+  for (const id of ids) update.run(note, decisionId ?? null, id);
+}
+
+/** A return that could not be routed for a fault (not an answer): the rows go back in force. */
+export function reopenReturningPlanAdaptations(ids: number[]): void {
+  const update = db.prepare(
+    `UPDATE plan_adaptations SET status = 'active', resolution_note = NULL, resolved_at = NULL
+      WHERE id = ? AND status = 'returning'`
+  );
+  for (const id of ids) update.run(id);
+}
+
+/** The rows with these ids, any status, in id order. */
+export function planAdaptationRowsByIds(ids: readonly number[]): PlanAdaptationRow[] {
+  const wanted = [...new Set(ids.map(Number).filter((id) => id > 0))];
+  if (!wanted.length) return [];
+  return (
+    db
+      .prepare(`SELECT * FROM plan_adaptations WHERE id IN (${wanted.map(() => "?").join(", ")}) ORDER BY id`)
+      .all(...wanted) as any[]
+  ).map(hydrate);
+}
+
+/** Every row whose return is on its way through autonomy (`returning`), oldest first. */
+export function returningPlanAdaptations(): PlanAdaptationRow[] {
+  return rowsWithStatus("returning");
+}
+
+/**
+ * Settle rows still in one of `from` to a terminal `status` with its reason (and, when
+ * given, the decision that settled them). Only rows still in `from` move, so a second
+ * pass is a no-op. Returns how many moved.
+ */
+export function settlePlanAdaptationRows(
+  ids: number[],
+  from: readonly PlanAdaptationStatus[],
+  status: "restored" | "kept" | "skipped",
+  note: string,
+  restoreDecisionId: number | null = null
+): number {
+  if (!ids.length || !from.length) return 0;
+  const update = db.prepare(
+    `UPDATE plan_adaptations
+        SET status = ?, resolution_note = ?, resolved_at = datetime('now'),
+            restore_decision_id = COALESCE(?, restore_decision_id)
+      WHERE id = ? AND status IN (${from.map(() => "?").join(", ")})`
+  );
+  let moved = 0;
+  for (const id of ids) moved += Number(update.run(status, note, restoreDecisionId, id, ...from).changes) || 0;
+  return moved;
+}
+
+/**
  * Settle `asked` rows for good: `restored` (the athlete's yes landed the return) or
  * `kept` (the safe default — the adaptation stays). Only rows still `asked` move, so a
  * second pass is a no-op. Returns how many moved.
@@ -674,15 +753,30 @@ function clinicalMarks(decision: { risk_class?: unknown; autonomy_tier?: unknown
 }
 
 export function adaptationRestoreNeedsAsk(row: PlanAdaptationRow, decision: DecisionRef | null = decisionOf(row)): boolean {
-  if (clinicalMarks(decision)) return true;
+  return adaptationRestoreReason(row, decision) != null;
+}
+
+/**
+ * Why a due adaptation's end is not the date's to land, or null when it is: `clinical`
+ * (the server's own clinical marks — the clinician floor, which asks) or `pain` (a
+ * reason tied to pain or a training symptom — the return waits for that pain to settle,
+ * then comes back through autonomy by itself). Clinical outranks pain. An unreadable
+ * ledger is no evidence of either.
+ */
+export function adaptationRestoreReason(
+  row: PlanAdaptationRow,
+  decision: DecisionRef | null = decisionOf(row)
+): "clinical" | "pain" | null {
+  if (clinicalMarks(decision)) return "clinical";
+  let pain = false;
   const action = (decision?.action ?? {}) as any;
   const entries = [
     ...(Array.isArray(action.reason_provenance) ? action.reason_provenance : []),
     ...(Array.isArray(action.changes) ? action.changes : []),
   ];
-  if (entries.some(provenanceTiedToPain)) return true;
-  if (PAIN_WORDS.test(String(row.reason ?? ""))) return true;
-  if (row.proposal_id == null) return false;
+  if (entries.some(provenanceTiedToPain)) pain = true;
+  if (PAIN_WORDS.test(String(row.reason ?? ""))) pain = true;
+  if (row.proposal_id == null) return pain ? "pain" : null;
   try {
     const holds = db
       .prepare(
@@ -690,18 +784,62 @@ export function adaptationRestoreNeedsAsk(row: PlanAdaptationRow, decision: Deci
           WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ?`
       )
       .all(String(row.proposal_id)) as any[];
-    if (holds.some((hold) => clinicalMarks({ ...hold, context: parseJson(hold.context_json) }))) return true;
+    if (holds.some((hold) => clinicalMarks({ ...hold, context: parseJson(hold.context_json) }))) return "clinical";
     const proposal = db.prepare(`SELECT parsed_json FROM plan_proposals WHERE id = ?`).get(row.proposal_id) as any;
     const parsed = parseJson<any>(proposal?.parsed_json);
-    if (parsed?.clinical_provenance && typeof parsed.clinical_provenance === "object") return true;
+    if (parsed?.clinical_provenance && typeof parsed.clinical_provenance === "object") return "clinical";
     const change = (Array.isArray(parsed?.changes) ? parsed.changes : []).find(
       (c: any) => Number(c?.day_number) === row.day_number && [c?.exercise, c?.swap?.to, c?.swap?.from].some((n) => sameName(n, row.exercise))
     );
-    if (change && (provenanceTiedToPain(change) || PAIN_WORDS.test(String(change.reason ?? "")))) return true;
+    if (change && (provenanceTiedToPain(change) || PAIN_WORDS.test(String(change.reason ?? "")))) pain = true;
   } catch {
     // An unreadable ledger is not evidence of pain; the restore keeps its plain path.
   }
-  return false;
+  return pain ? "pain" : null;
+}
+
+/**
+ * The words a pain-tied adaptation was written in — the row's own reason and the reason
+ * of the change that made it — and the day they were written, for the pain read
+ * (injury-symptom-link.ts painEpisodeState), plus any training symptom the change's own
+ * reason provenance names. The written day is the athlete's LOCAL day (the stamps are
+ * SQLite's UTC). Never throws.
+ */
+export function adaptationPainWords(row: PlanAdaptationRow): {
+  texts: string[];
+  written_on: string | null;
+  symptom_ids: number[];
+} {
+  const texts = [String(row.reason ?? "")];
+  const symptomIds = new Set<number>();
+  const noteProvenance = (entry: any) => {
+    const p = entry?.reason_provenance;
+    if (!p || typeof p !== "object" || !/symptom/i.test(String(p.source_ref_type ?? ""))) return;
+    const id = Number(p.source_ref_key);
+    if (Number.isInteger(id) && id > 0) symptomIds.add(id);
+  };
+  let writtenOn: string | null = localDayOfStamp(row.created_at) ?? (String(row.created_at ?? "").slice(0, 10) || null);
+  if (row.proposal_id != null) {
+    try {
+      const proposal = db
+        .prepare(`SELECT parsed_json, created_at FROM plan_proposals WHERE id = ?`)
+        .get(row.proposal_id) as any;
+      const parsed = parseJson<any>(proposal?.parsed_json);
+      const change = (Array.isArray(parsed?.changes) ? parsed.changes : []).find(
+        (c: any) => Number(c?.day_number) === row.day_number && [c?.exercise, c?.swap?.to, c?.swap?.from].some((n) => sameName(n, row.exercise))
+      );
+      if (change?.reason) texts.push(String(change.reason));
+      noteProvenance(change);
+      writtenOn = localDayOfStamp(proposal?.created_at) ?? writtenOn;
+    } catch {
+      // The row's own words still speak.
+    }
+  }
+  return {
+    texts: [...new Set(texts.map((t) => t.trim()).filter(Boolean))],
+    written_on: ISO_DAY.test(writtenOn ?? "") ? writtenOn : null,
+    symptom_ids: [...symptomIds],
+  };
 }
 
 // ---------- reads ----------
@@ -806,8 +944,11 @@ export interface PlanAdaptationRestoreOutcome {
   restored: PlanAdaptationRow[];
   skipped: Array<PlanAdaptationRow & { note: string }>;
   cancelled: PlanAdaptationRow[];
-  /** Due, but made around pain: the caller asks before anything is written (still `active`). */
-  asked: PlanAdaptationRow[];
+  /**
+   * Due, but not the date's to land (still `active`, nothing written): `clinical` the
+   * caller asks about; `pain` comes back through autonomy once that pain has settled.
+   */
+  asked: Array<PlanAdaptationRow & { ask_reason: "clinical" | "pain" }>;
 }
 
 const RESTORE_FIELDS = [
@@ -927,9 +1068,11 @@ export function restoreDuePlanAdaptations(today: string = localDateISO()): PlanA
       postpone.run(layer.until_date, `waits for the trip version on top of it, until ${layer.until_date}`, row.id);
       continue;
     }
-    // Made around pain: nothing is written; the caller asks for the return instead.
-    if (adaptationRestoreNeedsAsk(row, decision)) {
-      outcome.asked.push(row);
+    // Made around pain (or on the clinician floor): nothing is written here; the caller
+    // decides the return (autonomy-service.ts expirePlanAdaptations).
+    const askReason = adaptationRestoreReason(row, decision);
+    if (askReason) {
+      outcome.asked.push({ ...row, ask_reason: askReason });
       continue;
     }
     const current = row.after ? liveRow(row.day_number, row.after.exercise_id, row.after.exercise) : null;

@@ -126,6 +126,47 @@ export function listReviewHeldProposals(limit = 20) {
 // posture, but it is a QUESTION that changes nothing until the athlete answers it — and an ask
 // they never see is indistinguishable from no ask. The gate stays shut for every OTHER
 // requested_review row; see protective-fuel-draft.ts for why this one is different.
+//
+// Two holds are deliberately NOT here, though each carries a reason this list once named:
+//   - a CLINICIAN hold (`clinical_ceiling`): it is for the person and their doctor, read on
+//     the waiting list's "For you and your doctor" mast (awaitingBrainDecisions), never as a
+//     Today decision. (The list used to name 'clinical', a code no writer stamps.)
+//   - a REDRAW'S VOLUME-FLOOR HOLD (isRedrawVolumeFloorHold): a `safety_floor` hold on a plan
+//     draft whose unrepaired weekly-set shortfall the server stamped on it. It waits on
+//     "Waiting on you" with its own sentence; it is not something Today raises.
+// Every other `safety_floor` hold (a conference's unresolved safety conflict, a caller's
+// refused floor) still reaches Today.
+export const ATTENTION_REVIEW_REASON_CODES = ["safety_floor", "user_lock", "domain_policy"] as const;
+
+/**
+ * Is this hydrated proposal a plan redraw held for a weekly volume floor the server's verify
+ * pass could not repair? `verifyPlanDraftVolume` (coachOps/training.ts) stamps the still-open
+ * findings on the stored draft as `volume_floor_unresolved`, and `volumeFloorAutonomy` routes it
+ * with `clamp_refused`, which the autonomy layer records as `safety_floor`. Both halves, or no.
+ */
+export function isRedrawVolumeFloorHold(proposal: unknown): boolean {
+  const row = proposal as any;
+  if (String(row?.autonomy?.review_reason_code ?? "") !== "safety_floor") return false;
+  const unresolved = row?.parsed?.volume_floor_unresolved;
+  return Array.isArray(unresolved) && unresolved.length > 0;
+}
+
+// The same test as SQL over a `plan_proposals p` row and its correlated `brain_decisions d`,
+// kept beside its TS twin. A row whose payload is not valid JSON is never read as one.
+const REDRAW_VOLUME_FLOOR_HOLD_SQL = `(
+  json_extract(d.context_json, '$.review_reason_code') = 'safety_floor'
+  AND json_valid(p.parsed_json)
+  AND COALESCE(json_array_length(p.parsed_json, '$.volume_floor_unresolved'), 0) > 0
+)`;
+
+const ATTENTION_REVIEW_HOLD_SQL = `(
+  (
+    json_extract(d.context_json, '$.review_reason_code') IN (${ATTENTION_REVIEW_REASON_CODES.map((code) => `'${code}'`).join(",")})
+    AND NOT ${REDRAW_VOLUME_FLOOR_HOLD_SQL}
+  )
+  OR ${PROTECTIVE_FUEL_ASK_SQL}
+)`;
+
 export function listAttentionReviewHeldProposals(limit = 20) {
   const rows = db
     .prepare(
@@ -138,11 +179,7 @@ export function listAttentionReviewHeldProposals(limit = 20) {
              WHERE d.source_ref_type = 'plan_proposal'
                AND d.source_ref_key = CAST(p.id AS TEXT)
                AND d.status = 'review'
-               AND (
-                 json_extract(d.context_json, '$.review_reason_code') IN
-                   ('safety_floor','user_lock','domain_policy','clinical')
-                 OR ${PROTECTIVE_FUEL_ASK_SQL}
-               )
+               AND ${ATTENTION_REVIEW_HOLD_SQL}
           )
         ORDER BY (
           SELECT MAX(d.id)
@@ -150,11 +187,7 @@ export function listAttentionReviewHeldProposals(limit = 20) {
            WHERE d.source_ref_type = 'plan_proposal'
              AND d.source_ref_key = CAST(p.id AS TEXT)
              AND d.status = 'review'
-             AND (
-               json_extract(d.context_json, '$.review_reason_code') IN
-                 ('safety_floor','user_lock','domain_policy','clinical')
-               OR ${PROTECTIVE_FUEL_ASK_SQL}
-             )
+             AND ${ATTENTION_REVIEW_HOLD_SQL}
         ) DESC
         LIMIT ?`
     )

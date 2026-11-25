@@ -420,8 +420,10 @@ dayCoachRouter.post("/what-if", (req, res) => {
 // "Do it": hand the what-if's change to the team as a DRAFT. The body is {job_id} — the
 // server reads the question and the change from that job's own stored answer (never a
 // client echo, so the clinical mark cannot be dropped), writes a plan proposal and routes it through
-// the ONE autonomy policy — anything clinical is held clinician-directed, a calorie
-// target always waits on the athlete, and a goal is never drafted (it is theirs to
+// the ONE autonomy policy. The app's tap IS the athlete's yes (their explicit request),
+// so it never comes back as a second question; anything clinical is still held
+// clinician-directed, a calorie number the nutrition floors had to move still waits on
+// them, review_everything still asks, and a goal is never drafted (it is theirs to
 // name, in chat). Never applies on its own authority. {ok:false, error, tried:[]} at
 // 200 when there is nothing concrete to hand over.
 dayCoachRouter.post("/what-if/do", (req, res, next) => {

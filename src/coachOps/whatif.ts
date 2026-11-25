@@ -14,15 +14,19 @@
 //                draft through the ONE autonomy policy
 //                (applyProposalWithAutonomy → decideAutonomyTier). It never applies on
 //                its own authority: the policy decides the tier, and
+//                  - the athlete's own tap in the app IS their yes: it rides as their
+//                    explicit request (as a chat-requested edit does), so it never
+//                    comes back as a second hold — every floor below still applies;
 //                  - anything clinical is held clinician-directed (the chat detector, now
-//                    shared, reads the athlete's words and the change itself);
-//                  - a calorie/protein target always waits on the athlete — the what-if
-//                    did not run the check-in's protective caps, so the team never lands
-//                    that number on its own (a half-target is completed from the active
-//                    target, so the draft is always one the athlete can approve);
-//                  - a training edit read against a plan that has moved since is
-//                    requested at `ask`, never landed quietly: the policy then holds it
-//                    (or, under lead mode, announces it with the one-tap Undo);
+//                    shared, reads the athlete's words and the change itself), tap or not;
+//                  - handed over by anyone else (an MCP client), a calorie/protein target
+//                    waits on the athlete — the what-if did not run the check-in's
+//                    protective caps (a half-target is completed from the active target,
+//                    so the draft is always one the athlete can approve);
+//                  - a training edit read against a plan that has moved since: tapped, it
+//                    lands only while every lift it acts on is still on its day (else
+//                    nothing is written); handed over by anyone else it is requested at
+//                    `ask` (the policy holds it, or under lead announces it with Undo);
 //                  - a goal (or anything without a concrete edit) is never drafted at
 //                    all — a goal is the athlete's to name, in their own words.
 //
@@ -57,6 +61,7 @@ import { getAgentJob, linkAgentJobRef } from "../repo/chat.js";
 import { getActiveNutritionTarget } from "../repo/nutrition.js";
 import { computeGoalCheck } from "../repo/profile.js";
 import { captureProposalEvidence } from "../repo/proposal-truth.js";
+import { getPlan } from "../repo/plan.js";
 import { createProposal, getProposal } from "../repo/proposals.js";
 import { interactiveTimeoutForOp } from "../repo/settings.js";
 import { localDateISO } from "../repo/shared.js";
@@ -582,28 +587,55 @@ export function whatIfDo(input: WhatIfDoInput): WhatIfDoResult {
   const planMoved = change.kind === "training" && (!answer.plan_basis || answer.plan_basis !== planBasis());
   const instruction = `${WHAT_IF_INSTRUCTION_PREFIX} ${change.summary}`.slice(0, 500);
   let payload: Record<string, unknown>;
+  // A calorie/protein number the nutrition floors had to move is not the number the card
+  // showed: a tap said yes to the card, not to this one, so it waits on the athlete.
+  let floorMoved = false;
   if (change.kind === "nutrition" && change.nutrition) {
     const bounded = clampNutritionFloors(
       { ...change.nutrition },
       { kcal: "target_kcal", protein: "protein_g" },
       safeGoalCheck()
     );
-    payload = { kind: "nutrition_target", summary: change.summary, nutrition: bounded };
+    const shown = change.nutrition as Record<string, unknown>;
+    floorMoved = ["target_kcal", "protein_g"].some(
+      (k) => shown[k] != null && Number((bounded as Record<string, unknown>)[k]) !== Number(shown[k])
+    );
+    payload = {
+      kind: "nutrition_target",
+      summary: change.summary,
+      nutrition: bounded,
+      // Read by the autonomy sweeps: a number the athlete never saw is theirs to answer.
+      ...(floorMoved ? { what_if_floor_moved: true } : {}),
+    };
   } else {
     payload = { summary: change.summary, changes: change.changes ?? [] };
   }
   if (provenance) payload.clinical_provenance = provenance;
+  // THE TAP IS THE YES. The athlete asked the question and tapped "Do it" in the app: that
+  // is their consent to this change, carried the way a chat-requested edit carries it
+  // (explicit_user_request), so it never comes back as a second question. Only their own
+  // act carries it — an MCP client or any other caller hands the change over as the
+  // team's, and that hand-off still waits on the athlete for a calorie target or a moved
+  // plan. Every floor applies on top of a tap: clinical stays clinician-directed, the
+  // nutrition floors are clamped above, review_everything still asks (their own posture).
+  const athleteAct = input?.athlete_act === true;
+  // A tapped training answer read against a plan that has since moved lands only where
+  // its premise still stands: every lift it acts on still on its day. Otherwise nothing
+  // is written and nothing is asked — the answer is simply out of date.
+  if (athleteAct && planMoved && !whatIfPremiseStands(change.changes ?? [])) {
+    return nothing("your plan has moved since this answer, so nothing changed — ask again for a fresh read", {
+      plan_moved: true,
+      change,
+    });
+  }
   const proposal = createProposal(WHAT_IF_PROPOSAL_AGENT, instruction, "", payload) as any;
   linkAgentJobRef(jobId, "plan_proposals", Number(proposal.id));
-  const holdForAthlete = change.kind === "nutrition" || planMoved;
+  const holdForAthlete = (!athleteAct && (change.kind === "nutrition" || planMoved)) || floorMoved;
   const routed = applyProposalWithAutonomy(Number(proposal.id), {
-    // The athlete asked for this change and tapped "Do it" in the app: their decision,
-    // not a coach surprise. Only their own act carries the mark — an MCP client or any
-    // other caller hands the change over as the team's. Every floor still applies on top.
-    ...(input?.athlete_act === true ? { explicit_user_request: true } : {}),
-    // A calorie target from a what-if always waits on the athlete: the check-in's
-    // protective caps did not produce it, so the team never lands it on its own. A
-    // training answer whose plan has moved since is requested at ask too.
+    ...(athleteAct ? { explicit_user_request: true } : {}),
+    // Handed over by anyone but the athlete: a calorie target from a what-if waits on
+    // them (the check-in's protective caps did not produce it), and so does a training
+    // answer whose plan has moved since. A tapped number the floors moved waits too.
     ...(holdForAthlete ? { requested_tier: "ask" as const } : {}),
     clinical,
     clinical_provenance: provenance ?? undefined,
@@ -620,6 +652,34 @@ export function whatIfDo(input: WhatIfDoInput): WhatIfDoResult {
     plan_moved: planMoved,
     change,
     ...(state === "refused" ? { error: String(routed?.error ?? "the team couldn't take this change") } : {}),
+  });
+}
+
+// Every lift a training answer acts on (a swap's `from`, or the lift a change names) is
+// still on its plan day. A read that fails is not a premise that stands.
+function whatIfPremiseStands(changes: readonly WhatIfPlanChange[]): boolean {
+  let plan: any[];
+  try {
+    plan = getPlan() as any[];
+  } catch {
+    return false;
+  }
+  if (!changes.length) return false;
+  return changes.every((change: any) => {
+    const day = plan.find((d) => Number(d?.day_number) === Number(change?.day_number));
+    const name = String(change?.swap?.from ?? change?.exercise ?? "")
+      .trim()
+      .toLowerCase();
+    const items = Array.isArray(day?.items) ? day.items : [];
+    return (
+      !!name &&
+      items.some(
+        (item: any) =>
+          String(item?.exercise ?? "")
+            .trim()
+            .toLowerCase() === name
+      )
+    );
   });
 }
 

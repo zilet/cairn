@@ -347,7 +347,7 @@ test("a read nobody is looking at computes the same answer and writes nothing", 
 
 // ---- the surface -------------------------------------------------------------
 
-test("it reaches the athlete through the Today rail, exactly once, as an ordinary quiet card", () => {
+test("it reaches the athlete through the Today rail as ONE quiet pull row behind 'more'", () => {
   seedEpisodicWearer();
   const agenda = repo.todayAgenda(localDaysAgo(0));
   const all = [...agenda.primary, ...agenda.more];
@@ -355,9 +355,15 @@ test("it reaches the athlete through the Today rail, exactly once, as an ordinar
   assert.equal(hits.length, 1, "exactly ONE recheck suggestion exists");
   assert.ok(hits[0].title);
   assert.equal(violatesReadingGrammar(hits[0].title), null);
-  // And it does not come back tomorrow.
+  assert.equal(hits[0].pull, true, "an optional offer is pull-only");
+  assert.ok(!agenda.primary.some((c) => c.id === "sensor-recheck"), "even alone on a quiet day it never goes inline");
+  // It waits there, unspent, until a reading lands or the person waves it off.
   const again = repo.todayAgenda(localDaysAgo(0));
-  assert.equal([...again.primary, ...again.more].filter((c) => c.id === "sensor-recheck").length, 0);
+  assert.equal(again.more.filter((c) => c.id === "sensor-recheck").length, 1);
+  assert.equal(repo.getAttentionSchedule(SIGNAL_KEY), null, "waiting in the drawer is not asking");
+  assert.equal(repo.holdTodayAgendaDismissal("sensor-recheck"), true);
+  const dismissed = repo.todayAgenda(localDaysAgo(0));
+  assert.equal([...dismissed.primary, ...dismissed.more].filter((c) => c.id === "sensor-recheck").length, 0);
 });
 
 test("an agent's agenda read never spends the offer", () => {
@@ -399,25 +405,23 @@ test("a card the priority sort buries behind 'more' never spends the attention l
   );
 });
 
-// The mirror image: a card that genuinely reaches the visible set DOES spend the
-// ladder, exactly once, and the cooldown holds on the next day's build.
-test("a card that actually surfaces inline spends the ladder once, and the cooldown holds tomorrow", () => {
-  seedEpisodicWearer(); // the lone candidate this quiet day — lands inline
+// A pull card is never raised inline, so a human pass never spends its ladder: the
+// lone candidate on a quiet day still waits behind "more", and is still there tomorrow.
+test("a pull offer never takes the inline slot, so the ladder is never spent from Today", () => {
+  seedEpisodicWearer(); // the lone candidate this quiet day
   const first = repo.todayAgenda(localDaysAgo(0));
+  assert.deepEqual(first.primary, [], "nothing is raised inline");
   assert.ok(
-    first.primary.some((c) => c.id === "sensor-recheck"),
-    "with nothing else to outrank it, the lone candidate surfaces inline"
+    first.more.some((c) => c.id === "sensor-recheck"),
+    "it waits behind the disclosure"
   );
-  const entry = repo.getAttentionSchedule(SIGNAL_KEY);
-  assert.ok(entry, "surfacing it inline advances the shared attention ladder");
-  assert.equal(entry.tier, "active");
-  assert.ok(entry.next_due > entry.last_checked);
+  assert.equal(repo.getAttentionSchedule(SIGNAL_KEY), null, "no offer was spent");
 
   const tomorrow = addDaysISO(localDaysAgo(0), 1);
   const again = repo.todayAgenda(tomorrow);
   assert.ok(
-    ![...again.primary, ...again.more].some((c) => c.id === "sensor-recheck"),
-    "the freshly-spent cooldown holds on tomorrow's build"
+    again.more.some((c) => c.id === "sensor-recheck"),
+    "still waiting the next day"
   );
 });
 
@@ -442,6 +446,7 @@ test("this read can never move the day read or the next step", () => {
   // Fire the whole loop: the card is produced and its cooldown is filed.
   const agenda = repo.todayAgenda(date);
   assert.equal([...agenda.primary, ...agenda.more].filter((c) => c.id === "sensor-recheck").length, 1);
+  reconcileSensorRecheckAttention(date, true);
   assert.ok(repo.getAttentionSchedule(SIGNAL_KEY), "state was written");
 
   assert.deepEqual(stable(repo.dayRead(date)), readBefore, "the day read is identical either way");

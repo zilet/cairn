@@ -42,14 +42,14 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_today_asks",
-    "The Brief's quiet questions for a day (mirror of GET /api/today-asks): the evening before a planned lift day inside a trip, 'Lifting on the trip?' (answers yes / easier / skip); and an unanswered return of a race adaptation made around pain, back ONCE on the day it was stamped for (answers bring_back / keep). Pull-only — each is asked at most once and nothing is a gate.",
+    "The Brief's quiet questions for a day (mirror of GET /api/today-asks): an unanswered return of a race adaptation on the clinician floor, back ONCE on the day it was stamped for (answers bring_back / keep). A lift day inside a trip is no longer asked about — the coach lays the lighter trip version down the day before, with its Undo — and a change made around pain alone comes back by itself once that pain settles. Pull-only — each is asked at most once and nothing is a gate.",
     { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
     async ({ date }) => asText(briefAsks({ date }))
   );
 
   server.tool(
     "answer_today_ask",
-    "Answer one Brief question by its key (mirror of POST /api/today-asks/answer). trip_lift: yes changes nothing, skip holds that day as rest (a claims_day calendar event), easier lands a one-day lighter version — each lift with a bodyweight twin swaps to it in a bodyweight rep range, every other lift stays a set lighter (the message names which) — laid over any race adaptation, which stays in force; the plan as it stood comes back the day after. adaptation_return: bring_back applies the held return, keep discards it (the adaptation stays); only a return the Brief actually asked answers. Answer only with the athlete's own answer. ok:false with the reason when it cannot land.",
+    "Answer one Brief question by its key (mirror of POST /api/today-asks/answer). trip_lift (the retired trip question, still answered for older clients; where the coach already laid the trip version down, yes and skip take it back first and easier keeps it): yes changes nothing, skip holds that day as rest (a claims_day calendar event), easier lands a one-day lighter version — each lift with a bodyweight twin swaps to it in a bodyweight rep range, every other lift stays a set lighter (the message names which) — laid over any race adaptation, which stays in force; the plan as it stood comes back the day after. adaptation_return: bring_back applies the held return, keep discards it (the adaptation stays); only a return the Brief actually asked answers. Answer only with the athlete's own answer. ok:false with the reason when it cannot land.",
     {
       key: z.string().describe("the ask's key, e.g. 'trip_lift:2026-10-23' or 'adaptation_return:812'"),
       answer: z.enum(["yes", "easier", "skip", "bring_back", "keep"]),

@@ -421,6 +421,10 @@ export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
     if ((d.action as any)?.kind === "training_structure_request" && (d.context as any)?.review_required !== true) {
       continue;
     }
+    // An asked adaptation return (the clinician floor's "bring it back?") is the Brief's
+    // own question with its own short life (plan-adaptation-asks.ts): it comes back once
+    // there and settles by itself. Listing it here too asked the same thing twice.
+    if ((d.context as any)?.review_reason_code === "adaptation_return_ask") continue;
     const decided = String(d.effective_date ?? "").slice(0, 10) || stampDay(d.created_at);
     if (!decided) continue;
     out.push(awaitingEntry(d, id, explanation, String(d.effective_date ?? decided), decided, forTheDoctor(d), scansOnFile));

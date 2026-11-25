@@ -46,11 +46,12 @@ export function travelOn(date: string): TravelDay | null {
   return travelDaysIn(date, date).get(date) ?? null;
 }
 
-// ---- the trip itself, for the trip-eve question ----
-// The Brief asks once, the evening before a planned lift day inside a trip, whether the
-// lifting travels too (brief-asks.ts). The answer is remembered ON THE TRIP — its
-// `meta.lift_answers[date]` — so each trip day is asked at most once, whatever the answer
-// was, and deleting the trip takes its answers with it.
+// ---- the trip itself, for the trip version of a lift day ----
+// The coach lays the lighter trip version over a planned lift day inside a trip by itself
+// (brief-asks.ts routeTripVersions) and remembers it ON THE TRIP — `meta.lift_defaults
+// [date]` — so each trip day is handled at most once. An older client may still answer
+// the retired evening question; those answers stay in `meta.lift_answers[date]`. Deleting
+// the trip takes both with it.
 
 export type TripLiftAnswer = "yes" | "skip" | "easier";
 
@@ -63,6 +64,12 @@ export interface TripEvent {
   meta: Record<string, unknown>;
   /** Answers already given for this trip's lift days, by date. */
   lift_answers: Record<string, TripLiftAnswer>;
+  /**
+   * The trip versions the coach laid down by itself, by date -> the draft it wrote
+   * (trip-version.ts). One per trip day, ever: an Undo of it is the athlete's "as
+   * planned", and the day is never offered again.
+   */
+  lift_defaults: Record<string, number>;
 }
 
 const TRIP_ANSWERS: ReadonlySet<string> = new Set(["yes", "skip", "easier"]);
@@ -82,6 +89,16 @@ function liftAnswersOf(meta: Record<string, unknown>): Record<string, TripLiftAn
   if (!raw || typeof raw !== "object") return out;
   for (const [date, answer] of Object.entries(raw as Record<string, unknown>)) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(date) && TRIP_ANSWERS.has(String(answer))) out[date] = answer as TripLiftAnswer;
+  }
+  return out;
+}
+
+function liftDefaultsOf(meta: Record<string, unknown>): Record<string, number> {
+  const raw = meta.lift_defaults;
+  const out: Record<string, number> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [date, id] of Object.entries(raw as Record<string, unknown>)) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Number(id))) out[date] = Number(id);
   }
   return out;
 }
@@ -118,6 +135,7 @@ export function tripEventOn(date: string): TripEvent | null {
       end_date: row.end_date ? String(row.end_date).slice(0, 10) : null,
       meta,
       lift_answers: liftAnswersOf(meta),
+      lift_defaults: liftDefaultsOf(meta),
     };
   }
   return null;
@@ -132,6 +150,28 @@ export function recordTripLiftAnswer(tripId: number, date: string, answer: TripL
   const answers = { ...liftAnswersOf(meta), [String(date).slice(0, 10)]: answer };
   db.prepare(`UPDATE context_events SET meta_json = ? WHERE id = ?`).run(
     JSON.stringify({ ...meta, lift_answers: answers }),
+    Number(tripId)
+  );
+  return true;
+}
+
+/**
+ * Remember that the coach laid a trip version over one trip day (`proposalId` is the
+ * draft it wrote; 0 when the attempt wrote nothing). Recorded once, whatever came of it,
+ * so a day is never offered twice. Returns false with no such trip.
+ */
+export function recordTripLiftDefault(tripId: number, date: string, proposalId: number): boolean {
+  const row = db
+    .prepare(`SELECT meta_json FROM context_events WHERE id = ? AND kind = 'trip'`)
+    .get(Number(tripId)) as any;
+  if (!row) return false;
+  const meta = tripMeta(row.meta_json);
+  const defaults = {
+    ...liftDefaultsOf(meta),
+    [String(date).slice(0, 10)]: Math.max(0, Math.trunc(Number(proposalId)) || 0),
+  };
+  db.prepare(`UPDATE context_events SET meta_json = ? WHERE id = ?`).run(
+    JSON.stringify({ ...meta, lift_defaults: defaults }),
     Number(tripId)
   );
   return true;

@@ -528,3 +528,34 @@ test("a context tag chip flips in the same frame; the server settles it, a failu
   assert.equal(names.has("tag-chip-on"), true, "a failed toggle flips back");
   assert.deepEqual(toasts, ["Couldn't save that — try again."]);
 });
+
+test("a quiet check-in slot (the watch already measured last night) pushes nothing but stays reachable", async () => {
+  let opened = null;
+  const slot = elementStub({
+    dataset: { quiet: "1" },
+    querySelector: (sel) =>
+      sel === "#checkinOpen" ? { addEventListener: (_t, h) => { opened = h; } } : null,
+  });
+  const capture = loadCapture({
+    view: { querySelector: (sel) => (sel === "#checkinSlot" ? slot : null) },
+    api: async () => null,
+  });
+
+  await capture.loadCheckin();
+
+  assert.doesNotMatch(slot.innerHTML, /data-feel/, "no scales are pushed");
+  assert.match(slot.innerHTML, /id="checkinOpen"/, "one small optional entry remains");
+  assert.equal(typeof opened, "function");
+  opened();
+  assert.match(slot.innerHTML, /data-feel="energy"/, "tapping it opens the check-in");
+});
+
+test("a quiet check-in slot still speaks an answer already given", async () => {
+  const slot = elementStub({ dataset: { quiet: "1" } });
+  const capture = loadCapture({
+    view: { querySelector: (sel) => (sel === "#checkinSlot" ? slot : null) },
+    api: async () => ({ energy: 5, sleep_feel: 4, soreness: 2 }),
+  });
+  await capture.loadCheckin();
+  assert.match(slot.innerHTML, /feeling strong/);
+});

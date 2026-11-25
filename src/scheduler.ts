@@ -52,6 +52,7 @@ import { addDaysISO, localDayOfStamp, nowContext } from "./repo/shared.js";
 import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
 import { runEnergyDeficiencyWatch } from "./domain/brain/energy-deficiency-service.js";
 import { closePlanCoverageGap } from "./domain/brain/coverage-change.js";
+import { routeTripVersions } from "./domain/today/brief-asks.js";
 import {
   MEAL_REFRESH_INSTRUCTION_KEY,
   MEAL_REFRESH_REQUEST_KEY,
@@ -68,6 +69,10 @@ import {
 import { hasLoggedHistory, isStartingOut } from "./repo/first-run.js";
 import { createHash } from "node:crypto";
 import { log } from "./log.js";
+
+/** How often the trip-version pass (brief-asks.ts routeTripVersions) reads tomorrow. */
+const TRIP_VERSION_EVERY_MS = 15 * 60_000;
+
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
@@ -762,12 +767,27 @@ export function startScheduler() {
   // arrives. This is deterministic, fast, and idempotent; it never calls an
   // agent and every applied change already carries an exact undo snapshot.
   let boundaryApplyDate = "";
+  let tripVersionAt = 0;
   const boundaryApplyTick = () => {
     const today = localToday();
     // ONE tell budget for the tick: the thaw (inside the orphan sweep) and the boundary
     // pass together write at most two "your request didn't land" lines.
     const tells = newRequestTellBudget();
     runOrphanSweepIfDue(Date.now(), tells);
+    // The trip version of tomorrow's lift day, laid down by the coach instead of asked
+    // (brief-asks.ts routeTripVersions). Every quarter hour rather than once a day, so a
+    // trip added during the day still gets its day; idempotent per trip day.
+    if (Date.now() - tripVersionAt >= TRIP_VERSION_EVERY_MS) {
+      tripVersionAt = Date.now();
+      try {
+        const trip = routeTripVersions({ date: today });
+        if (trip.status === "routed")
+          log.info(`[brain] the trip version of ${trip.date} was routed (${trip.tier ?? "?"}).`);
+      } catch (e: any) {
+        recordSchedulerFailure("trip_version", e);
+        log.error(`[brain] the trip version pass failed`, { error: e });
+      }
+    }
     if (boundaryApplyDate === today) return;
     boundaryApplyDate = today;
     // First, the plan changes scoped to a date that has passed go back to the regular
@@ -780,11 +800,15 @@ export function startScheduler() {
         log.info(`[brain] ${expired.restored.length} race-scoped plan adaptation(s) returned to the regular plan.`);
       if (expired.skipped.length)
         log.info(`[brain] ${expired.skipped.length} plan adaptation(s) ended without a restore (a newer edit stands).`);
+      if (expired.returned?.routed.length)
+        log.info(
+          `[brain] the pain behind ${expired.returned.routed.length} adaptation(s) has settled; the return was routed (${expired.returned.tier ?? "?"}).`
+        );
     } catch (e: any) {
       recordSchedulerFailure("plan_adaptation_expiry", e);
       log.error(`[brain] plan adaptation expiry failed`, { error: e });
     }
-    // An asked return (a race adaptation made around pain) never re-asks: answered asks
+    // An asked return (a race adaptation on the clinician floor) never re-asks: answered asks
     // settle their rows, an unanswered one comes back ONCE on the Brief, and one past its
     // window settles to keeping the adaptation (plan-adaptation-asks.ts). Its own try.
     try {

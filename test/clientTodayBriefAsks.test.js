@@ -105,3 +105,12 @@ test("a refused answer puts the card back with the server's reason", async () =>
   assert.ok(host.querySelector("[data-brief-ask]"), "the question stands");
   assert.match(toasts[0], /already been answered/);
 });
+
+test("the check-in slot is mounted quiet only when the server says last night was measured", () => {
+  const { w } = load();
+  const brief = w.CairnTodayBrief;
+  assert.doesNotMatch(brief.checkinSlotHtml("rest", true, { signals: {} }), /data-quiet/);
+  assert.doesNotMatch(brief.checkinSlotHtml("easy", true), /data-quiet/);
+  assert.match(brief.checkinSlotHtml("easy", true, { signals: { wearable_last_night: true } }), /data-quiet="1"/);
+  assert.equal(brief.checkinSlotHtml("train", true, { signals: { wearable_last_night: true } }), "");
+});

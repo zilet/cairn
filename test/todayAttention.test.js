@@ -74,20 +74,19 @@ test("a fresh Brief keeps the lead even when every other surface has something",
   assert.equal(attention.brief_state, "new_read");
   assert.equal(tierOf(attention, "brief"), "lead");
   // Everything else is still present and ordered — nothing was dropped.
-  assert.deepEqual(surfaces(attention).sort(), ["brief", "feedback", "fuel", "insight", "weekly"]);
+  assert.deepEqual(surfaces(attention).sort(), ["brief", "fuel", "insight", "weekly"]);
 });
 
-test("a repeat-of-yesterday Brief yields the lead to a session awaiting feedback", () => {
+test("a session awaiting feedback is never the lead nor an attention item, even on a repeating Brief", () => {
   resetTables(...TABLES);
   const today = localDaysAgo(0);
   seedSessionAwaitingFeedback(today);
 
   const attention = decideTodayAttention(today, repeatRead(), { today });
 
-  assert.equal(attention.primary, "feedback");
+  assert.equal(attention.primary, "brief");
   assert.equal(attention.brief_state, "repeat_of_yesterday");
-  assert.equal(tierOf(attention, "feedback"), "lead");
-  assert.equal(tierOf(attention, "brief"), "supporting");
+  assert.deepEqual(surfaces(attention), ["brief"]);
 });
 
 test("a repeat-of-yesterday Brief yields the lead to a genuinely new insight", () => {
@@ -122,7 +121,7 @@ test("an actionable fuel state is surfaced but never takes the lead — the Brie
   assert.ok(surfaces(attention).includes("fuel"));
 });
 
-test("feedback outranks a new insight, which outranks a fresh weekly read", () => {
+test("a new insight outranks a fresh weekly read; unanswered feedback takes no part", () => {
   resetTables(...TABLES);
   const today = localDaysAgo(0);
   seedSessionAwaitingFeedback(today);
@@ -131,10 +130,10 @@ test("feedback outranks a new insight, which outranks a fresh weekly read", () =
 
   const attention = decideTodayAttention(today, repeatRead(), { today });
 
-  assert.deepEqual(surfaces(attention), ["feedback", "insight", "weekly", "brief"]);
+  assert.deepEqual(surfaces(attention), ["insight", "weekly", "brief"]);
   assert.deepEqual(
     attention.items.map((item) => item.tier),
-    ["lead", "supporting", "quiet", "quiet"]
+    ["lead", "supporting", "quiet"]
   );
 });
 

@@ -349,7 +349,7 @@ test("a proposal mixing scoped and lasting changes says each as what it is", () 
   assert.ok(lowerItems().some((item) => item.exercise === "Back Squat"));
 });
 
-test("an adaptation made around pain asks for its return instead of re-loading the area by itself", () => {
+test("an adaptation made around pain never re-loads the area by itself on a date, and asks nothing", () => {
   seedLower();
   const proposal = taperDraft([
     { day_number: 2, exercise: "Back Squat", remove: true, until: UNTIL, reason: "Knee pain on deep squats; resting it for the race" },
@@ -358,23 +358,17 @@ test("an adaptation made around pain asks for its return instead of re-loading t
   const outcome = expirePlanAdaptations(DAY_AFTER);
   assert.equal(outcome.restored.length, 0, "nothing re-loaded silently");
   assert.equal(outcome.asked.length, 1);
+  assert.equal(outcome.asked[0].ask_reason, "pain");
+  assert.equal(outcome.ask ?? null, null, "no question");
   assert.equal(lowerItems().some((item) => item.exercise === "Back Squat"), false);
-  assert.ok(outcome.ask, "an ask is on the ledger");
-  assert.equal(outcome.ask.status, "review");
-  assert.equal(outcome.ask.autonomy_tier, "ask");
-  assert.match(outcome.ask.summary, /bring Back Squat back to the regular plan\?/);
-  assert.doesNotMatch(outcome.ask.summary, /remov|dropp/i);
-  assert.equal(db.prepare(`SELECT status FROM plan_adaptations`).get().status, "asked");
+  // No settled report of that knee on file: the safe default — it stays as adapted.
+  assert.deepEqual(outcome.returned.kept, [db.prepare(`SELECT id FROM plan_adaptations`).get().id]);
+  assert.equal(db.prepare(`SELECT status FROM plan_adaptations`).get().status, "kept");
+  assert.equal(repo.listBrainDecisions({ status: "review", limit: 50 }).length, 0, "nothing waits on the athlete");
   assert.equal(activePlanAdaptations(DAY_AFTER).length, 0);
-  assert.equal(expirePlanAdaptations(localDaysAgo(-5)).ask ?? null, null, "asked once, not every morning");
-
-  // The athlete says yes: the squat comes back with its regular sets and reps (its load
-  // is grounded the way any movement added back is — off the log, never a stale number).
-  const yes = repo.applyProposal(Number(outcome.ask.source_ref_key));
-  assert.equal(yes.ok, true, JSON.stringify(yes));
-  const squat = lowerItems().find((item) => item.exercise === "Back Squat");
-  assert.ok(squat, "the squat is back on the day");
-  assert.deepEqual([squat.sets, squat.rep_low, squat.rep_high], [3, 5, 8]);
+  const later = expirePlanAdaptations(localDaysAgo(-5));
+  assert.equal(later.ask ?? null, null, "never asked later either");
+  assert.equal(later.returned ?? null, null);
 });
 
 test("a clinical-tier decision asks too, whatever its reason says", () => {

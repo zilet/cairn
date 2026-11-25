@@ -144,6 +144,9 @@ async function loadCaptureCheckin(): Promise<void> {
   if (!slot) return;
   const today = localISO();
   const hadDraft = !!checkinDraftFor(today);
+  // The watch already measured last night: nothing is pushed. The slot stays shut
+  // behind one small optional link unless the athlete already answered or opened it.
+  const quiet = slot.dataset.quiet === "1";
   // Same frame as the Brief: paint what this device last knew for today. It is
   // quiet (no entrance) because it is what was already on screen.
   if (!slot.innerHTML.trim() && !hadDraft) {
@@ -151,7 +154,7 @@ async function loadCaptureCheckin(): Promise<void> {
     if (memo?.answered) {
       slot.classList.add("slot-quiet");
       renderCheckinDone(slot, memo.answered as unknown as CaptureCheckin);
-    } else if (memo && !checkinDismissedToday(today)) {
+    } else if (memo && !quiet && !checkinDismissedToday(today)) {
       slot.classList.add("slot-quiet");
       renderCheckinForm(slot, today);
     }
@@ -180,6 +183,12 @@ async function loadCaptureCheckin(): Promise<void> {
   // Waved off this morning — stay gone until tomorrow. Asking again after a dismiss
   // is the definition of nagging.
   if (checkinDismissedToday(today)) { slot.innerHTML = ""; return; }
+  if (quiet) {
+    if (slot.querySelector(".checkin-form, .checkin-open")) return;
+    slot.innerHTML = `<button class="linkbtn linkbtn-plain linkbtn-sm checkin-open" id="checkinOpen" type="button">Add how you feel</button>`;
+    slot.querySelector("#checkinOpen")?.addEventListener("click", () => renderCheckinForm(slot, today));
+    return;
+  }
   writeCheckinPaint(today, null);
   if (slot.querySelector(".checkin-form")) return;
   renderCheckinForm(slot, today);

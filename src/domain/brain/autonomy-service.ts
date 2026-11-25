@@ -50,6 +50,7 @@ import {
   saveBrainRollback,
   supersedeReviewDecisionsForProposal,
   transitionBrainDecision,
+  USER_VETO_SQL,
 } from "../../repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../../repo/brain-evaluations.js";
 import {
@@ -79,7 +80,13 @@ import { mealPlanAutoDraftEnabled } from "../../repo/meal-plan-auto-draft.js";
 import { automaticOrphanIntent, chatOrphanIntent } from "../../repo/proposal-intent.js";
 import { buildProgressionProposal } from "../../repo/progression.js";
 import { changesReduceSets } from "../../repo/volume-guard.js";
-import { settledPainPlaceReader, type SettledPainPlace } from "../../repo/injury-symptom-link.js";
+import {
+  painEpisodeState,
+  settledPainPlaceReader,
+  type PainEpisodeState,
+  type SettledPainPlace,
+} from "../../repo/injury-symptom-link.js";
+import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { capProtectiveRaise, cutReaffirmation, deriveCutTarget } from "../../repo/cut-target.js";
 import { getSettings } from "../../repo/settings.js";
@@ -89,11 +96,17 @@ import {
   trainingBackstopSignature,
 } from "../../repo/training-cache.js";
 import {
+  adaptationPainWords,
   adaptationRowIsForRace,
   askedRestoreWords,
   cancelPlanAdaptationsForProposal,
   keptOneMoreWeekWords,
+  listWords,
   markPlanAdaptationsAsked,
+  markPlanAdaptationsReturning,
+  reopenReturningPlanAdaptations,
+  returningPlanAdaptations,
+  settlePlanAdaptationRows,
   proposalHasPlanAdaptations,
   reactivatePlanAdaptationsForUndoneRestore,
   refreshPlanAdaptationDays,
@@ -102,9 +115,12 @@ import {
   restoreDuePlanAdaptations,
   stampRestoreDecision,
   withPlanAdaptationWritesOwned,
+  planAdaptationRowsByIds,
   type PlanAdaptationRestoreOutcome,
+  type PlanAdaptationRow,
 } from "../../repo/plan-adaptations.js";
 import { invalidateDayRead } from "../../repo/intelligence.js";
+import { isProtectiveFuelAsk } from "../../repo/protective-fuel-draft.js";
 import {
   draftIsRegenerationProduct,
   regenerableProducer,
@@ -118,6 +134,12 @@ import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { activeCompositionPlanDayNumber, refreshPreparedDayForPlanChange } from "../../repo/adaptive-session.js";
 import { COVERAGE_AGENT, coverageAddsLift, coverageChangeStillFits } from "../../repo/plan-coverage.js";
+import {
+  isTripVersionProposal,
+  TRIP_VERSION_AGENT,
+  tripVersionDate,
+  tripVersionStillFits,
+} from "../../repo/trip-version.js";
 import {
   isPersonSuperseded,
   mismatchedChangeKeys,
@@ -152,7 +174,12 @@ export { conferenceClinicianNotes, recordConferenceClinicianNotes } from "./conf
 // nor is blocked by it. decideAutonomyTier's clamps (domain demotion / review posture /
 // clinical) and the boundary + freshness gates still apply unchanged. These agent
 // literals are stable contract values written by createProposal, not free text.
-const ROUTINE_CHANGE_SOURCES = new Set(["auto-progression", "auto-run-plan"]);
+//
+// The coach's trip version of a lift day (repo/trip-version.ts) rides the same exemption:
+// a one-day layer that restores itself the day after is bounded however many sets it
+// trims, and a surprise budget that pushed it past its day would make it a change about
+// nothing.
+const ROUTINE_CHANGE_SOURCES = new Set(["auto-progression", "auto-run-plan", TRIP_VERSION_AGENT]);
 
 type ProposalShape = {
   kind: "nutrition_target" | "training_structure" | "training_target" | "exercise_rotation";
@@ -796,13 +823,77 @@ function isCoverageChange(proposal: any): boolean {
   return String(proposal?.agent ?? "") === COVERAGE_AGENT && !!proposal?.parsed?.coverage_gap;
 }
 
+// A server-computed draft whose premise is a read of its own, not the generic evidence
+// fingerprint: a coverage change (its gap still standing in the plan as written) and the
+// coach's trip version of a lift day (its trip and its day still ahead, its lifts still on
+// the day — repo/trip-version.ts). `fits`: evidence drift elsewhere is moot. `gone` /
+// `held`: withdrawn quietly, never a question. `unknown`: a read failed. Null for every
+// other draft, which keeps the ordinary gates.
+type ServerPremise = "fits" | "gone" | "held" | "unknown";
+
+function serverPremise(proposal: any, asOf: string): ServerPremise | null {
+  if (isCoverageChange(proposal)) return coverageChangeStillFits(proposal.parsed, asOf);
+  if (String(proposal?.agent ?? "") === TRIP_VERSION_AGENT && isTripVersionProposal(proposal)) {
+    return tripVersionStillFits(proposal.parsed, asOf);
+  }
+  if (isAdaptationReturn(proposal)) return adaptationReturnPremise(proposal, asOf);
+  return null;
+}
+
+// The return of a change made around pain (returnPainAdaptations) stands only while that
+// pain stays settled: it is read again at every gate it passes. Open again (or no longer
+// tied to a settled report) → `held`; a read that fails → `unknown`.
+function isAdaptationReturn(proposal: any): boolean {
+  return String(proposal?.agent ?? "") === ADAPTATION_RETURN_AGENT && !!proposal?.parsed?.adaptation_return;
+}
+
+function adaptationReturnRowIds(proposal: any): number[] {
+  const ids = proposal?.parsed?.adaptation_return?.row_ids;
+  return (Array.isArray(ids) ? ids : []).map(Number).filter((id: number) => id > 0);
+}
+
+function adaptationReturnPremise(proposal: any, asOf: string): ServerPremise {
+  let rows: PlanAdaptationRow[];
+  try {
+    rows = planAdaptationRowsByIds(adaptationReturnRowIds(proposal));
+  } catch {
+    return "unknown";
+  }
+  if (!rows.length) return "unknown";
+  for (const row of rows) {
+    const state = adaptationPainState(row, asOf);
+    if (!state) return "unknown";
+    if (state.state !== "settled") return "held";
+  }
+  return "fits";
+}
+
+// A withdrawn return puts its rows back in force: tomorrow's pass reads the pain again.
+function reopenWithdrawnReturn(proposal: any): void {
+  if (!isAdaptationReturn(proposal)) return;
+  try {
+    reopenReturningPlanAdaptations(adaptationReturnRowIds(proposal));
+  } catch (error) {
+    log.warn("[brain] could not reopen a withdrawn adaptation return", { error });
+  }
+}
+
 function coverageRequestedTier(proposal: any, requested: AutonomyTier | undefined): AutonomyTier | undefined {
   if (!isCoverageChange(proposal) || !coverageAddsLift(proposal.parsed)) return requested;
   return !requested || requested === "observe" || requested === "quiet_apply" ? "announce" : requested;
 }
 
+// A trip version (laid down the day before its trip day) waits the same way: today's
+// session, when it is the same plan day, is not the trip day's.
+// A trip version is laid down the day before but never lands before its own day: the
+// athlete who lifts that plan day at home on the eve gets the plan as written.
 function coverageMustWait(proposal: any): boolean {
-  if (!isCoverageChange(proposal)) return false;
+  const tripVersion = String(proposal?.agent ?? "") === TRIP_VERSION_AGENT;
+  if (!isCoverageChange(proposal) && !tripVersion) return false;
+  if (tripVersion) {
+    const day = tripVersionDate(proposal?.parsed);
+    if (!day || day > localDateISO()) return true;
+  }
   try {
     const composed = activeCompositionPlanDayNumber(localDateISO());
     return composed != null && proposalPlanDayNumbers(proposal).includes(composed);
@@ -842,6 +933,10 @@ function decisionForAppliedProposal(proposalId: number, result: any) {
 // safeguard exists for — filled the fetch with rows that all failed the filter, and
 // the guard read an empty set and quietly stopped firing. A safeguard that switches
 // itself off under load is worse than none, because nothing says it did.
+//
+// A trip version (repo/trip-version.ts) is left out of both counts: its Undo means "I'll
+// lift as planned on this trip day", a fact about one hotel room, not a verdict on the
+// coach's training changes — it must never move the training domain to announce-first.
 export function domainIsDemoted(domain: BrainDomain): boolean {
   const row = db
     .prepare(
@@ -849,9 +944,10 @@ export function domainIsDemoted(domain: BrainDomain): boolean {
          FROM brain_decisions
         WHERE domain = ? AND autonomy_tier IN ('quiet_apply','announce')
           AND status IN ('applied','reverted')
+          AND (source IS NULL OR source != ?)
           AND date(created_at) >= date('now','-90 days')`
     )
-    .get(domain) as any;
+    .get(domain, TRIP_VERSION_AGENT) as any;
   return domainShouldDemote(Number(row?.reverted ?? 0), Number(row?.n ?? 0));
 }
 
@@ -1147,6 +1243,10 @@ function attemptStaleDraftRegeneration(
     // The boundary and the thaw — where a stale draft would otherwise be set aside — may
     // also rebase a bounded agent draft. The first apply gate keeps its hold.
     allowRebase?: boolean;
+    // The tier the stale hold was first asked at (thawRequestedTier), carried onto the
+    // replacement: a requested tier only ever tightens policy, so a change first asked to
+    // be announced is never landed quietly by its own regeneration.
+    requested_tier?: AutonomyTier;
   }
 ): RegenerationAttempt {
   // The athlete's own asks are untouched: a clinical ceiling stays clinician-directed, a
@@ -1175,11 +1275,15 @@ function attemptStaleDraftRegeneration(
       if (replacement && verifyProposalEvidenceFreshness(replacement.parsed, localDateISO()).status !== "current") {
         throw new Error("the regenerated draft is not current");
       }
-      // A regenerated draft earns its tier FRESH. No requested_tier, no inherited
-      // coordination: it goes through the whole pipeline as if it had just been written,
-      // which is exactly what it is.
+      // A regenerated draft earns its tier FRESH: no inherited coordination, and no
+      // requested tier unless the caller passed the one the stale hold was asked at (which
+      // can only tighten policy). It goes through the whole pipeline as if it had just
+      // been written, which is exactly what it is.
       const autonomy = replacement
-        ? applyProposalWithAutonomy(Number(replacement.id), { skip_regeneration: true })
+        ? applyProposalWithAutonomy(Number(replacement.id), {
+            skip_regeneration: true,
+            ...(input.requested_tier ? { requested_tier: input.requested_tier } : {}),
+          })
         : null;
       const replacementDecisionId = Number(autonomy?.decision?.id) || null;
       const receipt = recordDecision({
@@ -1383,15 +1487,28 @@ export function applyProposalWithAutonomy(
   const proposalFreshness = proposalNeedsEvidenceFreshness(shape)
     ? verifyProposalEvidenceFreshness(proposal.parsed, localDateISO())
     : null;
-  // A coverage change is held to its own premise (isCoverageChange above). Anything but
-  // `fits` — the gap closed, this is a held week, or a read failed — withdraws it quietly:
-  // never a question, and the daily pass reads the plan afresh. `fits`: evidence drift
-  // elsewhere is moot.
-  const coveragePremise = isCoverageChange(proposal) ? coverageChangeStillFits(proposal.parsed, localDateISO()) : null;
+  // A coverage change or a trip version is held to its own premise (serverPremise above).
+  // Anything but `fits` — the gap closed, a held week, a trip day gone, or a read failed —
+  // withdraws it quietly: never a question, and the pass that wrote it reads afresh.
+  // `fits`: evidence drift elsewhere is moot.
+  const coveragePremise = serverPremise(proposal, localDateISO());
   if (coveragePremise != null && coveragePremise !== "fits" && !input.explicit_user_request) {
     setProposalStatus(Number(proposal.id), "superseded", { recordDecision: false });
-    return { ok: true, applied: false, superseded: true, reason: `coverage premise ${coveragePremise}` };
+    reopenWithdrawnReturn(proposal);
+    const reason = isCoverageChange(proposal) ? `coverage premise ${coveragePremise}` : `premise ${coveragePremise}`;
+    return { ok: true, applied: false, superseded: true, reason };
   }
+  // What this routing was asked with, recorded on a stale hold so whatever later reads
+  // the hold (resolveUndecidedHolds, the thaw) sees the lock, the refused clamp and the
+  // requested tier — the freshness gate runs before the policy that would have used them.
+  const staleRoutingInputs = {
+    requested_tier: input.requested_tier ?? null,
+    user_locked: !!input.user_locked,
+    clamp_refused: !!input.clamp_refused,
+    safety_response: !!input.safety_response,
+    coordination_key: input.coordination_key ?? null,
+    clinical,
+  };
   const storedProposalEvidence = proposalEvidenceSnapshot(proposal.parsed);
   const scheduledProposalEvidence =
     storedProposalEvidence ??
@@ -1438,6 +1555,7 @@ export function applyProposalWithAutonomy(
       coordination_key: input.coordination_key,
       coordinated_update: input.coordinated_update,
       freshness: proposalFreshness,
+      policy_inputs: staleRoutingInputs,
     });
   }
   const createdAt = Date.parse(String(proposal.created_at ?? ""));
@@ -1470,6 +1588,7 @@ export function applyProposalWithAutonomy(
       coordination_key: input.coordination_key,
       coordinated_update: input.coordinated_update,
       freshness: proposalFreshness,
+      policy_inputs: staleRoutingInputs,
     });
   }
   // The magnitude gate must not trust an agent-declared delta (the payload rarely
@@ -2675,6 +2794,171 @@ function retireHoldsWithEndedSource(): number {
   return retired;
 }
 
+// ---- HOLDS THAT EXIST ONLY BECAUSE THE SYSTEM COULD NOT MAKE UP ITS MIND ------------
+//
+// Two review codes are not a person's question at all:
+//   • `stale_snapshot` — the draft's evidence fingerprint moved (or it never had one)
+//     between drafting and landing. The athlete cannot adjudicate a fingerprint diff, so
+//     the hold gets exactly the thaw's answer, but also for a hold an older pass already
+//     stamped (which the thaw never reads again): a dead premise (draftRetirement) retires
+//     it; otherwise the producer reads it again through attemptStaleDraftRegeneration
+//     (allowRebase — a deterministic producer re-runs, a bounded agent draft only
+//     training/context drift made stale is re-stamped, ONCE: a regeneration product is
+//     never regenerated), and the replacement earns its tier fresh, carrying the tier the
+//     hold was first asked at. Anything the producer cannot read again — plan drift, a
+//     nutrition draft, an unverified legacy draft, an aged one — is retired quietly with
+//     the readable receipt. Nothing is ever re-stamped here by hand, and nothing is set
+//     aside under review_everything (the person asked to see everything).
+//   • `requested_review` — stamped when a CALLER's requested `ask` (a specialist's
+//     ceiling, a what-if handed over by a client that is not the athlete, an older thaw's
+//     re-offer of that tier, an API caller) outranked policy. No person's "let me look at
+//     this first" ever writes it: a person's lock is `user_lock`, their posture
+//     `review_posture`. Under `lead` only (Amendment 3: a model's ask is a heads-up there),
+//     a bounded change (`changes[]`, or a nutrition target) is re-decided once
+//     (`undecided_resolved` stamped first), the ask carried as announce. announce_first and
+//     review_everything keep the model's ask, as documented. The protective-fuel question
+//     and a `days` restructure keep their hold.
+// Neither touches the floors: clinical (clinicianFloorHolds, or the chat detector's own
+// clinical mark), a lock or a refused safety clamp (on the context or the routing inputs
+// the hold recorded), an unrepaired volume floor, a safety conflict. A read that fails
+// changes nothing. Both wait out the adoption grace window.
+function holdOnFloor(decision: ParkedDecision, proposal: any): boolean {
+  const context = (decision.context ?? {}) as Record<string, any>;
+  const inputs = (context.policy_inputs ?? {}) as Record<string, any>;
+  const unresolvedVolume = proposal?.parsed?.volume_floor_unresolved;
+  return (
+    clinicianFloorHolds(decision) ||
+    context.user_locked === true ||
+    inputs.user_locked === true ||
+    inputs.clamp_refused === true ||
+    (Array.isArray(unresolvedVolume) && unresolvedVolume.length > 0) ||
+    // A what-if calorie number the nutrition floors moved from the one the athlete saw.
+    proposal?.parsed?.what_if_floor_moved === true ||
+    serverClinicalProvenance(proposal?.parsed?.clinical_provenance) !== null ||
+    (Array.isArray(context.unresolved_conflicts) &&
+      context.unresolved_conflicts.some((key: unknown) => conflictIsSafetyFloor(String(key) as any)))
+  );
+}
+
+function retireStaleHold(proposal: any, why: string, outcome: string): void {
+  retireDraftWithDeadPremise(proposal, {
+    outcome: "premise_gone",
+    why,
+    action_outcome: outcome,
+    hold_context: { stale_snapshot_resolved: outcome },
+    action: {},
+  });
+}
+
+/** One `stale_snapshot` hold: read again by its producer once, or retired quietly. */
+function resolveStaleSnapshotHold(
+  decision: ParkedDecision,
+  proposal: any,
+  settled: ReturnType<typeof settledPainPlaceReader>,
+  today: string,
+  leadMode: CairnLeadModeValue
+): "rerouted" | "retired" | "left" {
+  const dead = draftRetirement(proposal, settled, today);
+  if (dead) {
+    retireDraftWithDeadPremise(proposal, dead);
+    return "retired";
+  }
+  const context = (decision.context ?? {}) as Record<string, any>;
+  const shape = proposalShape(proposal);
+  // Read against the plan as it is NOW, never the freshness saved when the hold was
+  // written: a plan that moved since is plan drift, which no rebase may paper over.
+  const freshness = verifyProposalEvidenceFreshness(proposal.parsed, today);
+  const ceiling = draftAgeCeilingDays(shape);
+  const aged = draftAgeDays(proposal) > ceiling;
+  const regenerated = attemptStaleDraftRegeneration(proposal, shape, {
+    freshness,
+    aged,
+    clinical: false,
+    user_locked: false,
+    asOf: today,
+    parked: decision,
+    allowRebase: !aged,
+    requested_tier: thawRequestedTier(context, leadMode),
+  });
+  if (regenerated.regenerated) return "rerouted";
+  retireStaleHold(
+    proposal,
+    aged
+      ? `This draft waited more than ${ceiling} days, so it no longer describes where you are.`
+      : "Your plan or training moved after this was drafted, so it no longer describes where you are.",
+    aged ? "superseded_stale_proposal" : "superseded_stale_evidence"
+  );
+  return "retired";
+}
+
+/** One `requested_review` hold on a bounded change, re-decided by policy once (lead only). */
+function resolveRequestedReviewHold(decision: ParkedDecision, proposal: any): "rerouted" | "left" {
+  const parsed = proposal?.parsed ?? {};
+  if (Array.isArray(parsed.days)) return "left";
+  if (parsed.kind !== "nutrition_target" && !Array.isArray(parsed.changes)) return "left";
+  if (isProtectiveFuelAsk(proposal)) return "left";
+  const context = (decision.context ?? {}) as Record<string, any>;
+  if (context.undecided_resolved) return "left";
+  const stamped = patchBrainDecision(Number(decision.id), {
+    context: { ...context, undecided_resolved: { code: "requested_review", at: new Date().toISOString() } },
+  });
+  if (!stamped) return "left";
+  // The caller's ask was an opinion about how LOUDLY to say the change, never a floor: it
+  // rides as a heads-up (announce), the way lead already reads a model's ask
+  // (leadModelCeiling) — so a re-decided hold is announced with its Undo, never landed
+  // quietly past the opinion that held it.
+  const requested = String(context.policy_inputs?.requested_tier ?? "");
+  const tier: AutonomyTier | undefined =
+    requested === "ask" || requested === "clinician"
+      ? "announce"
+      : requested === "announce" || requested === "quiet_apply"
+        ? (requested as AutonomyTier)
+        : undefined;
+  applyProposalWithAutonomy(Number(proposal.id), {
+    ...(tier ? { requested_tier: tier } : {}),
+    ...(decisionWasTheAthletesRequest(decision) ? { explicit_user_request: true } : {}),
+  });
+  return "rerouted";
+}
+
+function resolveUndecidedHolds(leadMode: CairnLeadModeValue, now = Date.now()): number {
+  let resolved = 0;
+  const today = localDateISO(new Date(now));
+  let settled: ReturnType<typeof settledPainPlaceReader> | null = null;
+  const settledReader: ReturnType<typeof settledPainPlaceReader> = (text, writtenOn, options) =>
+    (settled ??= settledPainPlaceReader(today))(text, writtenOn, options);
+  const seen = new Set<number>();
+  for (const decision of listBrainDecisions({ status: "review", limit: 100 })) {
+    try {
+      const code = String((decision.context as any)?.review_reason_code ?? "");
+      if (code !== "stale_snapshot" && code !== "requested_review") continue;
+      // requested_review: lead only (announce_first and review_everything keep the model's
+      // ask); stale_snapshot: never under review_everything (nothing is set aside there).
+      if (code === "requested_review" && leadMode !== "lead") continue;
+      if (code === "stale_snapshot" && leadMode === "review_everything") continue;
+      const proposalId =
+        Number((decision.action as any)?.proposal_id) ||
+        (decision.source_ref_type === "plan_proposal" ? Number(decision.source_ref_key) : 0);
+      if (!(proposalId > 0) || seen.has(proposalId)) continue;
+      seen.add(proposalId);
+      const proposal = getProposal(proposalId) as any;
+      if (!proposal || proposal.status !== "draft") continue;
+      const createdAt = parseDbTime(proposal.created_at)?.getTime() ?? Number.NaN;
+      if (!Number.isFinite(createdAt) || now - createdAt < ORPHAN_ADOPTION_GRACE_MS) continue;
+      if (holdOnFloor(decision, proposal)) continue;
+      const outcome =
+        code === "stale_snapshot"
+          ? resolveStaleSnapshotHold(decision, proposal, settledReader, today, leadMode)
+          : resolveRequestedReviewHold(decision, proposal);
+      if (outcome !== "left") resolved += 1;
+    } catch (err) {
+      // Per-row isolation: one unreadable hold must never break the sweep.
+      recordAsyncFailure("apply", "resolve_undecided_hold", err);
+    }
+  }
+  return resolved;
+}
+
 // The thaw's own version: a row stamped by an older pass gets one read by this one.
 // 3 (v2 wave 1): under lead a training target, rotation or restructure is decided and
 // announced rather than asked (LEAD_DECIDED_KINDS, brain/autonomy.ts), so every ask an
@@ -2810,6 +3094,12 @@ export function thawParkedReviewDecisions(
       if (
         clinicianFloorHolds(decision) ||
         context.user_locked === true ||
+        // A stale hold records the routing's own lock / refused clamp (staleRoutingInputs):
+        // the freshness gate ran before the policy that would have held it on that floor.
+        context.policy_inputs?.user_locked === true ||
+        context.policy_inputs?.clamp_refused === true ||
+        // A what-if calorie number the floors moved from the one the athlete saw: theirs.
+        proposal?.parsed?.what_if_floor_moved === true ||
         THAW_FLOOR_REASON_CODES.has(String(context.review_reason_code ?? "")) ||
         // A conference hold over a SAFETY conflict it could not close (a hurt part under
         // load, an allergy, a medication meeting a supplement) is a floor, whatever code an
@@ -2948,6 +3238,8 @@ export function adoptOrphanedDrafts(opts: { tells?: RequestTellBudget } = {}): {
   retired: number;
   /** Review holds closed because the draft they asked about is no longer live. */
   closed: number;
+  /** Stale-snapshot and requested-review holds re-decided by today's policy, or retired. */
+  undecided: number;
 } {
   // Parked decisions thaw on the same deterministic tick as orphaned drafts, ahead of
   // adoption: a decision re-offered here may retire the very draft the loop below would
@@ -2967,6 +3259,10 @@ export function adoptOrphanedDrafts(opts: { tells?: RequestTellBudget } = {}): {
   // leaves alone — a parked apply_error carries a pending change, so the thaw never touches
   // it, and nothing else ever asked whether the change it carries still exists.
   const closed = retireHoldsWithEndedSource();
+  // THIRD, still ahead of the thaw: a hold that exists only because the system could not
+  // make up its mind (a stale snapshot, a caller's requested review) is re-decided by
+  // today's policy once, or retired — never left parked as the athlete's question.
+  const undecided = resolveUndecidedHolds(leadMode);
   const thaw = thawParkedReviewDecisions(leadMode, { tells: opts.tells });
   let adopted = 0;
   let skipped = 0;
@@ -3156,7 +3452,7 @@ export function adoptOrphanedDrafts(opts: { tells?: RequestTellBudget } = {}): {
       skipped += 1;
     }
   }
-  return { adopted, skipped, thawed: thaw.thawed, superseded: thaw.superseded, retired, closed };
+  return { adopted, skipped, thawed: thaw.thawed, superseded: thaw.superseded, retired, closed, undecided };
 }
 
 // A PENDING CHANGE IS JUDGED AGAINST THE EVIDENCE IN FORCE ON THE DAY IT APPLIES.
@@ -3807,9 +4103,10 @@ export function applyDueAnnouncedDecisions(
       // the hold passes, and nothing becomes a question. A read that failed waits a day.
       // Standing and unheld, a logged set or a context note since it was made is no reason
       // to hold it.
-      const coveragePremise = isCoverageChange(proposal) ? coverageChangeStillFits(proposal.parsed, asOf) : null;
+      const coveragePremise = serverPremise(proposal, asOf);
       if (coveragePremise === "gone" || coveragePremise === "held") {
         setProposalStatus(proposalId, "superseded", { recordDecision: false });
+        reopenWithdrawnReturn(proposal);
         if (getBrainDecision(announced.id!)?.status !== "canceled") transitionBrainDecision(announced.id!, "canceled");
         recordFailure(announced.id!, "canceled_moot");
         continue;
@@ -4247,6 +4544,8 @@ export function revertDecision(
               held_by_user_on: localDateISO(),
             },
           });
+          // A Hold on the return of a change made around pain is "keep it", for good.
+          keepAdaptationsForUndoneReturn(decision);
           return { ok: true, decision: held ?? canceled };
         }
         return { ok: true, decision: canceled };
@@ -4404,6 +4703,9 @@ export function revertDecision(
       }
       const reverted = transitionBrainDecision(id, "reverted");
       if (!reverted) throw new UndoRefusal(UNDO_NOT_NOW);
+      // The Undo of the return of a change made around pain is "keep it", for good: its
+      // rows are kept and never offered again (the rollback above put the adapted slots back).
+      keepAdaptationsForUndoneReturn(decision);
       // An Undo of a change scoped to the race already put its slots back: nothing is
       // left for the after-the-race restore to do (plan-adaptations.ts). Any other
       // adaptation still in force on those days reads the day as the Undo left it.
@@ -4485,18 +4787,30 @@ export function applyAnsweredProposal(proposalId: number): { result: any; decisi
 // rather than asked: the athlete agreed to a change WITH an end, and the end arriving is
 // not a new decision. Idempotent (each row resolves in this savepoint) and durable.
 //
-// One exception: a change made around pain (a clinical decision, or a reason tied to a
-// training symptom) is not the date's to undo. Its return is ASKED — an ordinary draft
-// held for the athlete's yes, the slots untouched until then (`ask`).
+// Two exceptions, neither the date's to undo:
+//   - a change made around PAIN (a reason tied to a training symptom) waits — untouched
+//     and unasked — while that pain is open, and once it has settled comes back through
+//     the ordinary autonomy path with its Undo (returnPainAdaptations below);
+//   - a CLINICAL decision's return (the clinician floor) is ASKED — an ordinary draft held
+//     for the athlete's yes, the slots untouched until then (`ask`).
 export function expirePlanAdaptations(today: string = localDateISO()): PlanAdaptationRestoreOutcome & {
   decision: any | null;
   ask?: any | null;
+  returned?: AdaptationReturnOutcome | null;
 } {
+  // Returns already on their way settle first (landed and standing → restored; the
+  // athlete's no → kept), so a row is never read twice in one pass.
+  try {
+    settleAdaptationReturns();
+  } catch (error) {
+    log.warn("[brain] could not settle adaptation returns", { error });
+  }
   const before = trainingPlanSnapshot();
   const beforeStamps = stampsByPlanKey();
   const result = withSqliteSavepoint("plan_adaptation_expiry", () => {
     const restoredOutcome = restoreDuePlanAdaptations(today);
-    const ask = restoredOutcome.asked.length ? askForAdaptationRestore(restoredOutcome.asked) : null;
+    const clinical = restoredOutcome.asked.filter((row) => row.ask_reason === "clinical");
+    const ask = clinical.length ? askForAdaptationRestore(clinical) : null;
     const outcome = { ...restoredOutcome, ask };
     if (!outcome.restored.length) {
       // Nothing came back because the athlete's own edits won: say so once, as a note.
@@ -4598,7 +4912,296 @@ export function expirePlanAdaptations(today: string = localDateISO()): PlanAdapt
       recordAsyncFailure("apply", "refresh_prepared_day", err);
     }
   }
-  return result;
+  // After the savepoint: the return routes through the whole autonomy pipeline (which
+  // owns its own savepoints and the landing-day refresh), and a failure there leaves the
+  // rows `active` for tomorrow's pass, never sinking the restores above.
+  const pain = result.asked.filter((row) => row.ask_reason === "pain");
+  let returned: AdaptationReturnOutcome | null = null;
+  if (pain.length) {
+    try {
+      returned = returnPainAdaptations(pain, today);
+    } catch (error) {
+      log.warn("[brain] could not route the return of an adaptation made around pain", { error });
+    }
+  }
+  return { ...result, returned };
+}
+
+// ---- the return of a change made around pain, once that pain has settled ------------
+//
+// A race adaptation that rested a lift for a sore knee is the knee's, not the date's. So
+// when its end date passes, the pain it was made around is read (injury-symptom-link.ts
+// painEpisodeState — the symptom lifecycle, never a freshness ladder):
+//   - OPEN (anything open names the place, or loads a lift the return would bring back):
+//     nothing changes and nothing is asked; the rows stay in force and are read again
+//     tomorrow;
+//   - SETTLED: the return is routed through the ORDINARY autonomy path as one draft — the
+//     exact changes the Brief's "Bring it back" applied (restoreChangesForAsk: the lift
+//     at its pre-adaptation prescription, never past it) — so lead lands it with the
+//     server-owned Undo and the decision's falsifiable expectation, announce_first tells
+//     first, review_everything asks. The rows go `returning` (one change in flight per
+//     subject), then `restored` once it lands and stands. Its Undo, a Hold or a discard is
+//     the athlete's "keep it": the rows go `kept`, for good, never offered again;
+//   - UNTIED (pain words, but nothing open and no settled report on file to tie them to —
+//     absence never closes a pain): the safe default an unanswered ask always settled to —
+//     the adaptation stays, said once as an observed note, nothing asked;
+//   - a read that failed: nothing changes, nothing is asked.
+export const ADAPTATION_RETURN_AGENT = "plan-adaptation-return";
+
+export interface AdaptationReturnOutcome {
+  /** Rows whose return was routed (the draft below). */
+  routed: number[];
+  /** Rows still waiting on an open pain. */
+  waiting: number[];
+  /** Rows kept as adapted because no settled report of the pain is on file. */
+  kept: number[];
+  /** Rows whose read failed: untouched. */
+  unavailable: number[];
+  /** Rows whose return the plan refused: ended without a restore. */
+  skipped: number[];
+  proposal_id: number | null;
+  tier: string | null;
+}
+
+const RETURN_REASON = "The pain this was changed around has settled: back to the regular plan.";
+const KEPT_UNTIED_NOTE =
+  "It was changed around pain and no settled report of that pain is on file, so it stays as it is. The regular plan comes back whenever you ask for it.";
+const KEPT_BY_UNDO_NOTE = "You chose to keep it as it is; the regular plan comes back whenever you ask for it.";
+const RETURN_SET_ASIDE_NOTE =
+  "The return to the regular plan was set aside, so it stays as it is until you ask for the regular plan.";
+
+const RETURN_WHY: readonly ((place: string, on: string) => string)[] = [
+  (place, on) => `${place} settled on ${on}, so the lift comes back the way it was written.`,
+  (place, on) => `${place} has been settled since ${on}, so the regular plan returns.`,
+  (place, on) => `With ${place.charAt(0).toLowerCase()}${place.slice(1)} settled since ${on}, the plan goes back to the lifting it was built for.`,
+];
+
+function liftMuscleGroup(name: string): string | null {
+  try {
+    const row = db.prepare(`SELECT muscle_group FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
+    return row?.muscle_group == null ? null : String(row.muscle_group);
+  } catch {
+    return null;
+  }
+}
+
+function adaptationPainState(row: PlanAdaptationRow, today: string): PainEpisodeState | null {
+  try {
+    const words = adaptationPainWords(row);
+    const names = [...new Set([row.before?.exercise, row.exercise, row.after?.exercise].filter((n): n is string => !!n))];
+    return painEpisodeState({
+      texts: words.texts,
+      written_on: words.written_on,
+      symptom_ids: words.symptom_ids,
+      lifts: names.map((name) => ({ name, muscle_group: liftMuscleGroup(name) })),
+      on: today,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function returnPainAdaptations(rows: PlanAdaptationRestoreOutcome["asked"], today: string): AdaptationReturnOutcome {
+  const out: AdaptationReturnOutcome = {
+    routed: [],
+    waiting: [],
+    kept: [],
+    unavailable: [],
+    skipped: [],
+    proposal_id: null,
+    tier: null,
+  };
+  const ready: Array<{ row: PlanAdaptationRestoreOutcome["asked"][number]; place: SettledPainPlace }> = [];
+  const untied: PlanAdaptationRestoreOutcome["asked"] = [];
+  for (const row of rows) {
+    const state = adaptationPainState(row, today);
+    if (!state) out.unavailable.push(row.id);
+    else if (state.state === "open") out.waiting.push(row.id);
+    else if (state.state === "untied") untied.push(row);
+    else ready.push({ row, place: state.place });
+  }
+  if (untied.length) keepUntiedAdaptations(untied, today, out);
+  if (!ready.length) return out;
+  const readyRows = ready.map((entry) => entry.row);
+  const ids = readyRows.map((row) => row.id);
+  const changes = restoreChangesForAsk(readyRows, RETURN_REASON);
+  if (!changes.length) {
+    settlePlanAdaptationRows(ids, ["active"], "skipped", "there was nothing left on the plan to bring back");
+    out.skipped.push(...ids);
+    return out;
+  }
+  const latest = ready.map((entry) => entry.place).sort((a, b) => b.resolved_on.localeCompare(a.resolved_on))[0];
+  const place = latest.spoken_place ? `Your ${latest.spoken_place}` : "The pain this was changed around";
+  const words = restoreDecisionWords(readyRows, readyRows.some(adaptationRowIsForRace));
+  const why = pickDayVariant(RETURN_WHY, today, "adaptation-return:why")(place, receiptDay(latest.resolved_on));
+  const proposal = createProposal(ADAPTATION_RETURN_AGENT, "Back to the regular plan: the pain this was changed around has settled", "", {
+    summary: words.summary,
+    rationale: `${why} Undo keeps it adapted for as long as you like.`,
+    changes,
+    adaptation_return: {
+      row_ids: ids,
+      symptom_ids: [...new Set(ready.map((entry) => entry.place.symptom_id))],
+      settled_on: latest.resolved_on,
+    },
+  }) as any;
+  const proposalId = Number(proposal?.id);
+  if (!(proposalId > 0)) {
+    out.unavailable.push(...ids);
+    return out;
+  }
+  out.proposal_id = proposalId;
+  // Off `active` BEFORE the routing writes the plan, the way an asked return always was,
+  // so nothing that reads live adaptations mistakes the return for a new edit of the slot.
+  markPlanAdaptationsReturning(ids, null, "made around pain; the pain has settled, so the regular plan is on its way back");
+  let routed: any = null;
+  try {
+    routed = applyProposalWithAutonomy(proposalId, {});
+  } catch (error) {
+    routed = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  const decisionId = Number(routed?.decision?.id) || null;
+  const acted = routed?.ok === true && routed?.superseded !== true && decisionId != null;
+  if (!acted) {
+    if (proposalStatus(proposalId) === "draft") setProposalStatus(proposalId, "superseded", { recordDecision: false });
+    // A fault, not an answer (no refusal from the plan), or the premise re-read at the
+    // gate withdrew it: the rows go back in force and tomorrow's pass reads them again.
+    if (routed?.superseded === true || (routed?.ok === false && routed?.refused !== true)) {
+      reopenReturningPlanAdaptations(ids);
+      out.unavailable.push(...ids);
+      return out;
+    }
+    // Refused by the plan: the return ends without a restore, said on the rows — never
+    // re-routed every morning.
+    settlePlanAdaptationRows(
+      ids,
+      ["returning"],
+      "skipped",
+      "the return to the regular plan couldn't land on the plan as it is now, so it stays as you have it"
+    );
+    out.skipped.push(...ids);
+    return out;
+  }
+  out.routed.push(...ids);
+  out.tier = String(routed?.tier ?? routed?.decision?.autonomy_tier ?? "") || null;
+  stampRestoreDecision(ids, decisionId!);
+  // Landed already (lead): settle at once, against the decision that carries the Undo.
+  settleAdaptationReturns();
+  return out;
+}
+
+function keepUntiedAdaptations(
+  rows: PlanAdaptationRestoreOutcome["asked"],
+  today: string,
+  out: AdaptationReturnOutcome
+): void {
+  const ids = rows.map((row) => row.id);
+  try {
+    withSqliteSavepoint("plan_adaptation_keep_untied", () => {
+      const moved = settlePlanAdaptationRows(ids, ["active"], "kept", KEPT_UNTIED_NOTE);
+      if (!moved) return;
+      const names = listWords(rows.map((row) => row.before?.exercise ?? row.exercise));
+      recordDecision({
+        effective_date: today,
+        kind: "training_target",
+        domain: "training",
+        summary: `${names || "The adapted lift"} stays as adapted.`.slice(0, 300),
+        rationale: KEPT_UNTIED_NOTE,
+        source: "plan_adaptation",
+        source_ref_type: null,
+        source_ref_key: null,
+        status: "observed",
+        autonomy_tier: "observe",
+        risk_class: "low",
+        reversible: false,
+        input_fingerprint: `plan_adaptation_kept:${ids.join(",")}`,
+        context: { plan_adaptation_ids: ids, plan_adaptation_restore: false, pain_untied: true },
+        action: { plan_adaptation_ids: ids },
+        specialist: null,
+        applied_at: null,
+        reverted_at: null,
+        superseded_by: null,
+        evaluator_version: null,
+      });
+    });
+    out.kept.push(...ids);
+  } catch (error) {
+    log.warn("[brain] could not keep an untied pain adaptation", { error });
+    out.unavailable.push(...ids);
+  }
+}
+
+/**
+ * Settle every return on its way: landed and standing → `restored` (against the applied
+ * decision, which carries the Undo); the athlete's no (an Undo, a Hold, a discard) →
+ * `kept`; set aside by the system → `kept`, never routed again. A draft still waiting for
+ * its boundary or a yes is left as it is. A row follows the NEWEST return draft that
+ * names it, so a draft the autonomy layer rewrote against fresh evidence (a rebase, a
+ * stale re-route — both keep the author and the payload) is still the same return.
+ * Idempotent.
+ */
+export function settleAdaptationReturns(): { restored: number[]; kept: number[] } {
+  const out = { restored: [] as number[], kept: [] as number[] };
+  const returning = returningPlanAdaptations();
+  if (!returning.length) return out;
+  const drafts = (
+    db
+      .prepare(`SELECT id, parsed_json FROM plan_proposals WHERE agent = ? ORDER BY id DESC LIMIT 200`)
+      .all(ADAPTATION_RETURN_AGENT) as Array<{ id: number; parsed_json: string | null }>
+  ).map((row) => {
+    let ids: number[] = [];
+    try {
+      const parsed = JSON.parse(String(row.parsed_json ?? "null"));
+      ids = (Array.isArray(parsed?.adaptation_return?.row_ids) ? parsed.adaptation_return.row_ids : []).map(Number);
+    } catch {
+      ids = [];
+    }
+    return { id: Number(row.id), rows: new Set(ids) };
+  });
+  const groups = new Map<number, number[]>();
+  for (const row of returning) {
+    const newest = drafts.find((draft) => draft.rows.has(row.id));
+    if (!newest) continue;
+    groups.set(newest.id, [...(groups.get(newest.id) ?? []), row.id]);
+  }
+  for (const [proposalId, ids] of groups) {
+    const status = proposalStatus(proposalId);
+    if (status === "draft" || status == null) continue;
+    const vetoed = db
+      .prepare(
+        `SELECT 1 FROM brain_decisions
+          WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ? AND ${USER_VETO_SQL} LIMIT 1`
+      )
+      .get(String(proposalId));
+    if (vetoed || status === "discarded") {
+      if (settlePlanAdaptationRows(ids, ["returning"], "kept", KEPT_BY_UNDO_NOTE)) out.kept.push(...ids);
+      continue;
+    }
+    if (status === "applied") {
+      const applied = db
+        .prepare(
+          `SELECT id FROM brain_decisions
+            WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ? AND status = 'applied'
+            ORDER BY id DESC LIMIT 1`
+        )
+        .get(String(proposalId)) as { id?: unknown } | undefined;
+      const appliedId = Number(applied?.id) || null;
+      if (settlePlanAdaptationRows(ids, ["returning"], "restored", RETURN_REASON, appliedId)) out.restored.push(...ids);
+      continue;
+    }
+    if (settlePlanAdaptationRows(ids, ["returning"], "kept", RETURN_SET_ASIDE_NOTE)) out.kept.push(...ids);
+  }
+  return out;
+}
+
+/** The athlete undid (or held) the return of a change made around pain: kept, for good. */
+function keepAdaptationsForUndoneReturn(decision: { source_ref_type?: unknown; source_ref_key?: unknown }): void {
+  if (decision.source_ref_type !== "plan_proposal") return;
+  const proposal = getProposal(Number(decision.source_ref_key)) as any;
+  if (String(proposal?.agent ?? "") !== ADAPTATION_RETURN_AGENT) return;
+  const ids = (Array.isArray(proposal?.parsed?.adaptation_return?.row_ids) ? proposal.parsed.adaptation_return.row_ids : [])
+    .map(Number)
+    .filter((id: number) => id > 0);
+  settlePlanAdaptationRows(ids, ["returning", "restored"], "kept", KEPT_BY_UNDO_NOTE);
 }
 
 // The return of race adaptations made around pain, as a draft held for the athlete's yes.

@@ -64,7 +64,13 @@ import { labQuantityNeutral } from "./lab-display.js";
 import { standingMomentum } from "./standing.js";
 // The waiting-draft 'plan' candidate — now the ONE Today surface that points at a
 // review-needed draft (the duplicate side-loader card was retired).
-import { listAttentionReviewHeldProposals, listProposals, listReviewHeldProposals } from "./proposals.js";
+import {
+  ATTENTION_REVIEW_REASON_CODES,
+  isRedrawVolumeFloorHold,
+  listAttentionReviewHeldProposals,
+  listProposals,
+  listReviewHeldProposals,
+} from "./proposals.js";
 import { isProtectiveFuelAsk } from "./protective-fuel-draft.js";
 // The two NEW Era-2 candidate producers, built by sibling agents. They land at
 // integration time; import them now (do not stub). Each returns a fully-formed
@@ -72,8 +78,8 @@ import { isProtectiveFuelAsk } from "./protective-fuel-draft.js";
 import { sinceLastLookedCandidate } from "./since-last.js";
 import { dismissGoalCheckin, goalCheckinCandidate } from "./goal-checkin.js";
 // The episodic-wearer's one calm offer: a night with the watch on would sharpen
-// the recovery read. Rides the shared attention schedule for its cooldown, so it
-// is made at most a handful of times and then goes quiet on its own.
+// the recovery read. A pull card: it waits behind "more" until a reading lands or
+// the person waves it off (the × releases its attention ladder).
 import { dismissSensorRecheck, reconcileSensorRecheckAttention, sensorRecheckCandidate } from "./sensor-recheck.js";
 // The one calm ask for a measurement a live derivation is blocked on. Same shape
 // as the sensor recheck: a pure producer here, and the attention ladder is only
@@ -120,6 +126,12 @@ export type TodayAgendaCandidate = {
   // surprise budget deferred or hasn't yet introduced it). Lets the client show
   // a quiet "· one new" cue on the disclosure — legible pull, never a push.
   waiting?: boolean;
+  // PULL ONLY: the card never takes an inline slot, however quiet the day. It waits
+  // behind the "more" disclosure for the person to open — a read, an optional offer or
+  // a request for data, not something Today raises. The producer sets it; the arbiter
+  // honours it (and `tier` is "more" to match). Unset, `tier` stays a suggestion the
+  // priority sort may override on a quiet day.
+  pull?: boolean;
 };
 
 export type TodayAgenda = {
@@ -141,16 +153,12 @@ export const TODAY_PRIMARY_MAX = 2;
 // quiet "more" disclosure (pull, never push) and take the inline slot on a
 // later day. Routine state cards (fuel, reconcile, lately, week-ahead…), the
 // hero, and announced brain changes (accountability must never be hidden by
-// presentation) are never budgeted. The ledger lives in app_state as a bounded
+// presentation) are never budgeted. A PULL card never goes inline at all, so it is
+// never budgeted either (the weekly read and the connection insight are always pull
+// now, so they left this set). The ledger lives in app_state as a bounded
 // { "<id>:<revision|title>": "YYYY-MM-DD introduced" } map.
 const TODAY_INTRO_KEY = "today_agenda_intro";
-const SURPRISE_IDS = new Set([
-  "health-focus",
-  "fast-loss-attention",
-  "connection-insight",
-  "weekly-read",
-  "draft-proposals",
-]);
+const SURPRISE_IDS = new Set(["health-focus", "fast-loss-attention", "draft-proposals"]);
 const INTRO_LEDGER_MAX_AGE_DAYS = 60;
 
 function introSig(c: TodayAgendaCandidate): string {
@@ -186,6 +194,7 @@ function applySurpriseBudget(
   let dirty = false;
   for (const c of ordered) {
     if (slots <= 0) break;
+    if (c.pull) continue; // never inline: it takes no slot and spends no allowance
     if (SURPRISE_IDS.has(c.id) && !(introSig(c) in ledger)) {
       if (allowance > 0) {
         allowance -= 1;
@@ -281,11 +290,15 @@ function fuelCandidate(date: string): TodayAgendaCandidate | null {
   };
 }
 
-// ---- fueling follow-through: after a nutrition-target change APPLIED, offer a calm
-// one-tap "how's fueling feeling?" read. fuelingFollowThroughDue gates it to the change's
-// 7-day window, a day with logged food, and "not answered yet" — so it self-omits the rest
-// of the time. A genuine coach-initiated follow-up, moderate priority (never urgent, never
-// a notification); it stays pull-only behind the quiet "more" when the day has bigger news. ----
+// ---- fueling follow-through: after a nutrition-target change APPLIED, a calm one-tap
+// "how's fueling feeling?" read. fuelingFollowThroughDue gates it to the change's 7-day
+// window, a day with logged food, and "not answered yet" — so it self-omits the rest of the
+// time. PULL ONLY: the brain judges the change off the weight trend, the logged food and the
+// check-ins without it, and an unanswered day is absent, never a signal (felt-signals'
+// fuelingResponse and underfueling's subjective channel read rows, never their lack). So it
+// waits behind "more" for a person who wants to say how it feels. The rail is its only
+// home in the app (the same read is `log_fueling_feedback` over MCP), so it is demoted
+// there rather than dropped. ----
 function fuelingFollowupCandidate(date: string): TodayAgendaCandidate | null {
   let due = false;
   try {
@@ -297,9 +310,10 @@ function fuelingFollowupCandidate(date: string): TodayAgendaCandidate | null {
   return {
     id: "fueling-followup",
     kind: "fuel",
-    tier: "primary",
+    tier: "more",
     priority: 42,
     client_card: "fueling-followup",
+    pull: true,
   };
 }
 
@@ -535,11 +549,22 @@ function autonomyOwnedDraft(proposal: any): boolean {
   return status === "pending" || status === "announced" || status === "applied";
 }
 
+// A review hold on the clinician floor: holdProposalForReview writes tier `clinician` and
+// code `clinical_ceiling` for it, and a later refresh never loosens either.
+function clinicianHeld(proposal: any): boolean {
+  return (
+    proposal?.autonomy?.status === "review" &&
+    (proposal.autonomy.tier === "clinician" || proposal.autonomy.review_reason_code === "clinical_ceiling")
+  );
+}
+
 // ---- plan: a draft that genuinely requires the athlete's review — the ask path
 // (lead_mode='review_everything', or a goal/user-locked/safety boundary), NOT a change
 // the autonomy layer already scheduled and NOT a budget hold (which waits quietly and
-// lands automatically when the surprise-budget week rolls). High because the athlete is
-// owed a decision. Applies the same autonomy filter the coach list (isOpenProposal) uses. ----
+// lands automatically when the surprise-budget week rolls), NOT a clinician hold (the
+// doctor's list), and NOT a redraw's volume-floor hold (the waiting list). High because
+// the athlete is owed a decision. Applies the same autonomy filter the coach list
+// (isOpenProposal) uses. ----
 function planDraftCandidate(): TodayAgendaCandidate | null {
   const leadMode = getSettings().lead_mode;
   const reviewHolds = (
@@ -555,6 +580,10 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
   ];
   const drafts = plans.filter((p) => {
     if (!p || p.status !== "draft" || autonomyOwnedDraft(p)) return false;
+    // A clinician hold is for the person and their doctor: it waits on the "For you and
+    // your doctor" mast of the waiting list (or "Waiting on you" for a training draft),
+    // never as a Today decision — in every posture.
+    if (clinicianHeld(p)) return false;
     // Review-everything intentionally preserves the traditional review queue,
     // including bare drafts. Coach-led postures never turn an orphaned chat or
     // manual artifact into a generic Review wall.
@@ -570,9 +599,12 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
     // athlete answers it. Same predicate the SQL reader uses, from the same module,
     // so the two filters cannot disagree about what reaches this surface.
     if (isProtectiveFuelAsk(p)) return true;
-    return ["safety_floor", "user_lock", "domain_policy", "clinical"].includes(
-      String(p.autonomy?.review_reason_code ?? "")
-    );
+    // A plan redraw held for a weekly volume floor its verify pass could not repair waits
+    // on "Waiting on you" with its own sentence; Today does not raise it. Every other
+    // safety_floor hold (a conference's unresolved safety conflict, a caller's refused
+    // floor) still does. Same predicate and code list as the SQL reader above.
+    if (isRedrawVolumeFloorHold(p)) return false;
+    return (ATTENTION_REVIEW_REASON_CODES as readonly string[]).includes(String(p.autonomy?.review_reason_code ?? ""));
   });
   if (!drafts.length) return null;
   const raw = String(drafts[0]?.instruction || "")
@@ -688,11 +720,15 @@ function healthCandidate(
   const body = clipAgenda(
     move || lead?.why || "Open the connected read to see how this is already shaping training and meals."
   );
+  // Only an act-now finding may claim an inline slot. A track-only picture is a read, not
+  // news for today: it waits behind "more" (and on You › Health) whatever else the day has.
+  const pressing = actNow > 0;
   return {
     id: "health-focus",
     kind: "health",
-    tier: actNow > 0 ? "primary" : "more",
-    priority: actNow > 0 ? 80 : 46,
+    tier: pressing ? "primary" : "more",
+    priority: pressing ? 80 : 46,
+    ...(pressing ? {} : { pull: true }),
     kicker: "HEALTH READ",
     title: clipAgenda(focus.headline || `${lead.group} is shaping today's coaching.`, 120),
     body,
@@ -797,11 +833,16 @@ function fastLossCandidate(
       : cut.verdict === "mixed"
         ? "Strength is mixed while the faster loss continues, so this is worth reviewing in context."
         : "Strength is sliding alongside the faster loss, so protecting the training signal matters now.";
+  // Only a SLIDING cut — the same verdict that makes `CutPressure.sliding` veto every earned
+  // promotion (progression.ts cutPressureOf) — is news for today. A fast loss with strength
+  // holding or mixed is a read worth having, so it waits behind "more" for the person to open.
+  const sliding = cut.verdict === "sliding";
   return {
     id: "fast-loss-attention",
     kind: "fuel",
-    tier: "primary",
-    priority: cut.verdict === "sliding" ? 81 : cut.verdict === "mixed" ? 77 : 73,
+    tier: sliding ? "primary" : "more",
+    priority: sliding ? 81 : cut.verdict === "mixed" ? 77 : 73,
+    ...(sliding ? {} : { pull: true }),
     kicker: "CUT QUALITY",
     title: "Your cut is moving faster than the muscle-preserving band.",
     body: strengthBody,
@@ -897,18 +938,24 @@ function adjustmentsCandidate(date: string, weeklyStats?: any): TodayAgendaCandi
   // could never be false: `recovering` is only ever set on a kind:'balance' row.
   // Removed rather than left as a guard that reads like it protects something.)
   const pressing = rows.some((a) => a && (a.kind === "deload" || a.kind === "gap"));
+  // PULL ONLY, every kind. These are the engine's own notes on the plan, each offering a
+  // "Plan it" / "Help me fit it in" conversation — an invitation, not news. The change
+  // itself is the brain's job through its own autonomous paths (the deterministic
+  // progression, the weekly and data-triggered evolution, a lead-mode recovery week when a
+  // deload is due, the coverage change for a missing pattern); a deload or a gap only ranks
+  // higher inside "more".
   return {
     id: "program-adjustments",
     kind: "plan",
-    tier: "primary",
+    tier: "more",
     priority: pressing ? 58 : 50,
     client_card: "program-adjustments",
+    pull: true,
   };
 }
 
 // ---- weekly read: "how the week went + the one change", waiting in-app (pull,
-// never push). Moderate — a genuine end-of-week reflection is worth surfacing when
-// one is waiting, but it never outranks something needing action today. Reads the
+// never push — so PULL ONLY here: it waits behind "more", never inline). Reads the
 // latest kind:'weekly_read' insight from listVisibleInsights. ----
 function weeklyCandidate(): TodayAgendaCandidate | null {
   const list = listVisibleInsights() as any[];
@@ -919,18 +966,18 @@ function weeklyCandidate(): TodayAgendaCandidate | null {
   return {
     id: "weekly-read",
     kind: "weekly",
-    tier: "primary",
+    tier: "more",
     priority: fresh ? 54 : 48,
     client_card: "weekly-read",
-    // The insight row id versions this attention item, so NEXT week's read is a
-    // genuinely new thing to the surprise budget while re-fetches of this one aren't.
+    // The insight row id versions this item: next week's read is a new one.
     revision: String(weekly.id ?? ""),
+    pull: true,
   };
 }
 
-// ---- connection insight: the one quiet cross-domain connection (pull, never push),
-// one at a time. Lower-moderate — genuinely interesting, never urgent. Reads the
-// latest NON-weekly insight from listVisibleInsights (mirrors loadTodayReads). ----
+// ---- connection insight: the one quiet cross-domain connection (pull, never push —
+// so PULL ONLY here), one at a time. Reads the latest NON-weekly insight from
+// listVisibleInsights (mirrors loadTodayReads). ----
 function insightCandidate(): TodayAgendaCandidate | null {
   const list = listVisibleInsights() as any[];
   const conn = (Array.isArray(list) ? list : []).find((i) => i && i.kind !== "weekly_read");
@@ -939,12 +986,12 @@ function insightCandidate(): TodayAgendaCandidate | null {
   return {
     id: "connection-insight",
     kind: "insight",
-    tier: "primary",
+    tier: "more",
     priority: fresh ? 44 : 38,
     client_card: "connection-insight",
-    // Versioned by the insight row id — a NEW connection is a new thing to the
-    // surprise budget; re-fetching the same one is not.
+    // Versioned by the insight row id: a NEW connection is a new item.
     revision: String(conn.id ?? ""),
+    pull: true,
   };
 }
 
@@ -1025,6 +1072,10 @@ function latelyCandidate(date: string, weeklyStats?: any): TodayAgendaCandidate 
 // change (its own Hold), a plan decision, a clinician item — none is in these lists.
 const FACT_KEYED_DISMISSALS = new Set(["since-last", "standing-momentum"]);
 
+// The measurement request's lab-recheck card id (measurementRequestCandidate). Today never
+// shows it: a lab follow-up is the doctor list's (see todayAgenda below).
+const LAB_RECHECK_REQUEST_ID = "measurement-request-lab-recheck";
+
 function factKey(candidate: TodayAgendaCandidate): string {
   const fact = candidate.dismiss_fact ?? candidate.revision ?? `${candidate.title ?? ""}\n${candidate.body ?? ""}`;
   return `${candidate.id}#${createHash("sha1").update(String(fact)).digest("hex").slice(0, 12)}`;
@@ -1104,13 +1155,19 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   add(safe(() => sinceLastLookedCandidate(d)));
   add(safe(() => goalCheckinCandidate()));
   add(safe(() => standingMomentumCandidate(d)));
-  // A PURE read here — never spends the offer. Its own priority (14) means the
-  // sort below decides whether it actually lands inline or behind "more", and
-  // that isn't known until every candidate is ranked; see the reconcile call
-  // after placement, which is the only place this offer may be spent.
+  // A PURE read here — never spends the offer. A pull card: it waits behind "more";
+  // see the reconcile call after placement, the only place this offer may be spent.
   add(safe(() => sensorRecheckCandidate(d)));
-  // Also a PURE read — the ask is only spent after placement, below.
-  add(safe(() => measurementRequestCandidate(d)));
+  // Also a PURE read — the ask is only spent after placement, below. A lab recheck is
+  // never asked here: it is a follow-up for the person and their doctor, and the doctor
+  // loop (doctor-loop.ts, the visit questions and the next checkup) already carries the
+  // same due attention row the request reads. The weigh-in and the tape still wait in "more".
+  add(
+    safe(() => {
+      const request = measurementRequestCandidate(d);
+      return request?.id === LAB_RECHECK_REQUEST_ID ? null : request;
+    })
+  );
 
   // A card the athlete waved off stays off while it says the same thing
   // (holdTodayAgendaDismissal). Only the fact-keyed cards are read here; the others
@@ -1140,17 +1197,20 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   // become `more` (collapsed behind one quiet disclosure). The arbiter may DEMOTE a
   // producer's suggested tier here, never promote it — placement is the arbiter's.
   // A held-out newcomer skips the inline tier (its slot backfills) but keeps its
-  // sorted position among "more" — waiting, never gone.
-  const inline = ordered.filter((c) => !heldOut.has(c.id));
+  // sorted position among "more" — waiting, never gone. A PULL card never goes inline
+  // at all; it keeps its sorted position among "more".
+  const inline = ordered.filter((c) => !heldOut.has(c.id) && !c.pull);
   const primary = inline.slice(0, TODAY_PRIMARY_MAX).map((c) => ({ ...c, tier: "primary" as const }));
   const primaryIds = new Set(primary.map((c) => c.id));
 
-  // The sensor-recheck offer may ONLY be spent now that placement is actually
-  // known: a card the priority sort buried behind "more" was never seen, and
-  // burning one of its ~4 offers on a card nobody saw would burn the ladder out
-  // silently. Mirrors the surprise budget's own live-day / human-pass gate above;
-  // `reconcileSensorRecheckAttention` also clears a resolved episode regardless of
-  // placement (that's cleanup, not spending, so it isn't gated on `surfaced`).
+  // The sensor-recheck offer and the measurement request spend a step of their
+  // attention ladder only when they are actually RAISED — placed inline. Both are pull
+  // cards now, so from Today they never are: each waits behind "more" until its need
+  // resolves (a reading / the measurement lands, or the reason lapses) or the person
+  // waves it off (holdTodayAgendaDismissal releases the ladder). Waiting is not asking,
+  // so a row in the drawer never burns an offer nobody saw. Each reconcile still clears
+  // a resolved episode regardless of placement (cleanup, not spending), on the live
+  // day a person opens only, never on an agent's read-only pass.
   if (d === localDateISO() && opts.markIntroduced !== false) {
     try {
       reconcileSensorRecheckAttention(d, primaryIds.has("sensor-recheck"));
@@ -1158,9 +1218,8 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
       /* presentation-only; a failed write just re-offers (or re-cleans) next time */
     }
     try {
-      // Same contract, one need at a time: the ask is spent only for the request
-      // that actually reached the inline set, and every retired need is swept
-      // regardless of placement.
+      // One need at a time: the step is spent only for a request that reached the
+      // inline set, and every retired need is swept regardless of placement.
       const surfaced = [...primaryIds].find((id) => id.startsWith("measurement-request-")) ?? null;
       reconcileMeasurementRequestAttention(d, surfaced);
     } catch {
@@ -1170,14 +1229,15 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
 
   // Stamp genuinely-new attention items that ended up behind the disclosure
   // (deferred by the budget, or simply outranked) so the client can whisper
-  // "· one new" on the collapsed summary — the waiting item stays pull-only.
+  // "· one new" on the collapsed summary — the waiting item stays pull-only. A pull
+  // card is never introduced inline, so it never carries the whisper either.
   const ledger = d === localDateISO() ? loadIntroLedger() : null;
   const more = ordered
     .filter((c) => !primaryIds.has(c.id))
     .map((c) => ({
       ...c,
       tier: "more" as const,
-      ...(ledger && SURPRISE_IDS.has(c.id) && !(introSig(c) in ledger) ? { waiting: true } : {}),
+      ...(ledger && !c.pull && SURPRISE_IDS.has(c.id) && !(introSig(c) in ledger) ? { waiting: true } : {}),
     }));
 
   return { hero, primary, more, total: ordered.length };

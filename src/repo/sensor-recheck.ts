@@ -388,13 +388,11 @@ const RECHECK_POLICY: CadencePolicy = {
  * Null is the common answer. Returns a card only when the read fires AND the
  * schedule says the offer may be made today.
  *
- * PURE READ — never writes. The candidate's own priority (14, deliberately below
- * `lately` at 15) means the salience arbiter's priority sort, not this function,
- * decides whether the card actually lands inline or behind the quiet "more"
- * disclosure — and that decision isn't known until every OTHER candidate has been
- * produced and ranked. So this function cannot itself decide whether the offer
- * was genuinely seen; call `reconcileSensorRecheckAttention` once placement is
- * known. See that function's own comment for why the two are split.
+ * PURE READ — never writes. A PULL card (`pull: true`): it never takes an inline
+ * slot, and waits behind the quiet "more" disclosure until a reading lands or the
+ * person waves it off. Placement is still the arbiter's, so this function cannot
+ * itself decide whether the offer was raised; call `reconcileSensorRecheckAttention`
+ * once placement is known. See that function's own comment for why the two are split.
  */
 export function sensorRecheckCandidate(asOf: string = localDateISO()): TodayAgendaCandidate | null {
   const recheck = sensorBaselineRecheck(asOf);
@@ -408,11 +406,10 @@ export function sensorRecheckCandidate(asOf: string = localDateISO()): TodayAgen
   return {
     id: "sensor-recheck",
     kind: "health",
-    tier: "primary",
-    // LOW on purpose — below `lately` (15), so on any day with something real to
-    // show it sits behind the quiet "more" disclosure. It only reaches an inline
-    // slot on a genuinely empty day, which is exactly when an optional offer is
-    // welcome and never in the way.
+    // An optional offer, never something Today raises: it waits behind "more".
+    tier: "more",
+    pull: true,
+    // LOW on purpose — below `lately` (15), so it sits at the foot of "more".
     priority: 14,
     kicker: line.kicker,
     title: line.title,

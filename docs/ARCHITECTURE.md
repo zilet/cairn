@@ -7029,23 +7029,73 @@ Every change the server makes is said once, in finished words a renderer prints 
   `src/contracts/brief-asks.ts`; `GET /api/today-asks`, `POST /api/today-asks/answer`, MCP
   `get_today_asks` / `answer_today_ask`; client `src/client/today-brief-client.ts`). Pull, never
   push; each asked at most once; never a gate.
-  - `trip_lift`: the evening before a planned lift day inside a trip, "Lifting on the trip?" —
-    yes (nothing changes), easier (a one-day plan adaptation that expires by itself: each lift with
-    a bodyweight twin swaps to it in a bodyweight rep range, the rest stay a set lighter, and the
-    answer names which), skip (the day held as rest through a `claims_day` context event, the ring
-    untouched). The answer is remembered on the trip, per day. The evening is the DEVICE zone's
-    hour (`nowContext`), never the host clock. "Easier" is a LAYER (`plan_adaptations.layer =
-    'trip'`): it never re-scopes a race adaptation on the same slot — its `before` is the
-    race-adapted slot, its restore returns there, a race row that comes due beneath it waits for it
-    (its end moves to the layer's), it is never "for the race", and it lands through
-    `applyAnsweredProposal` so its Undo exists and cancels only the trip rows.
-  - `adaptation_return`: a race adaptation made around pain asks for its return instead of
-    landing it (`askForAdaptationRestore`, `src/domain/brain/autonomy-service.ts`). Its hold carries
-    the reason code `adaptation_return_ask`, a thaw floor (`THAW_FLOOR_REASON_CODES`), so the
-    lead-mode thaw never re-offers or applies it. Its lifecycle is the settle pass's
-    (`src/repo/plan-adaptation-asks.ts`): unanswered, it comes back on the Brief ONCE
-    (`ASK_RESURFACE_AFTER_DAYS`), then settles to keeping the adaptation (`ASK_SETTLE_AFTER_DAYS`),
-    recorded on the rows; an answer anywhere settles it at once.
+  - `trip_lift` is no longer asked (2026-11-25). A planned lift day inside a SHORT trip that names
+    both its days (`tripIsBounded`, `src/repo/trip-version.ts`: explicit start and end, at most 14
+    days; an undated or open-ended trip lays nothing down) gets the "easier" version by itself: the
+    day before, `routeTripVersions` routes the one-day `layer:'trip'` adaptation (each lift with a
+    bodyweight twin swaps to it in a bodyweight rep range, the rest stay a set lighter) through
+    ordinary autonomy, author `trip-version`, a routine source (bounded, budget-exempt). It never
+    lands before its own day: lead schedules it for that morning's boundary, announce_first
+    announces it for that morning, review_everything holds it. Handled once per trip day,
+    remembered on the trip (`meta.lift_defaults`) AND by the draft itself (`tripVersionWrittenFor`),
+    so a trip edit never re-offers it; its Undo or Hold is "as planned", never re-offered and never
+    counted toward the training domain's demotion. Its premise (`tripVersionStillFits`, read by
+    `serverPremise` in place of the evidence fingerprint) means eve drift never parks it and a
+    vanished trip withdraws it. An older client's `trip_lift:<date>` answer is still accepted and
+    never an error. The layer rules are unchanged: it never re-scopes a race adaptation on the same
+    slot, its restore returns there, and its Undo cancels only the trip rows.
+  - `adaptation_return`: only a CLINICAL race adaptation still asks for its return
+    (`askForAdaptationRestore`, reason code `adaptation_return_ask`, a thaw floor, on the Brief only
+    — "Waiting on you" no longer repeats it; lifecycle in `src/repo/plan-adaptation-asks.ts`). A
+    PAIN-only adaptation returns by itself (`returnPainAdaptations`): `painEpisodeState`
+    (`src/repo/injury-symptom-link.ts`) decides from the symptom the change's provenance names, else
+    a same-place symptom of the same episode (the change written no later than its resolution).
+    Open: wait, unasked. Settled: the exact "Bring it back" payload goes through autonomy, rows
+    `returning` → `restored`, and it is re-checked against the pain at every gate
+    (`adaptationReturnPremise`); pain that reopens withdraws it and puts the rows back in force.
+    Undo, Hold or discard keeps the adaptation for good. No settled report to tie it to: kept, noted
+    once, nothing asked. A failed read changes nothing.
+
+## Asks the system no longer makes (2026-11-25)
+
+The owner's rule: the system adapts within the autonomy tiers with Undo and does not hand over
+decisions it can settle. What still asks: goal identity, the push offer, anything clinical (on "For
+you and your doctor"), the person's own lock or review posture, the protective-fuel question.
+
+- **Today asks only for what needs the person today.** A Today agenda candidate may carry
+  `pull: true` (`src/repo/today-agenda.ts`). The arbiter never places a pull card inline: it waits
+  behind "more", never spends the surprise budget, never gets the "one new" whisper. Pull cards: the
+  weekly read and the connection insight; program adjustments of every kind (the brain's own paths
+  make the changes); a track-only health read (act-now may go inline); a cut-quality read unless
+  strength is *sliding*; the fueling follow-up (its absence is never a signal); the sensor recheck
+  and the weigh-in/tape request (their attention ladder is spent only when a card goes inline, so
+  they wait until the need resolves or a × releases them). A lab-recheck request never reaches
+  Today; the doctor loop carries the same due rows.
+- **The "needs your decision" card** admits `user_lock`, `domain_policy`, the protective-fuel ask and
+  `safety_floor` holds, except a redraw's volume-floor hold (`isRedrawVolumeFloorHold`,
+  `src/repo/proposals.ts`: `safety_floor` plus a stamped `volume_floor_unresolved`), which waits on
+  "Waiting on you". A clinician hold (`clinical_ceiling`) never reaches Today in any posture.
+- **Undecided holds resolve themselves** (`resolveUndecidedHolds`, in the orphan sweep before the
+  thaw). A `stale_snapshot` hold gets the thaw's answer: the producer reads the draft again once
+  (`attemptStaleDraftRegeneration`, rebase allowed, the first-asked tier carried), else it is retired
+  with a receipt; it is never re-stamped by hand and never touched under review_everything. Under
+  lead ONLY, a caller-requested `requested_review` on a bounded change is re-decided once, the
+  caller's ask carried as announce; announce_first and review_everything keep the model's ask. Stale
+  holds record their routing's lock, refused clamp and requested tier, and those, the clinician
+  floor, an unrepaired volume floor and a what-if calorie number the floors moved all keep their
+  holds.
+- **A what-if "Do it" tap is the athlete's explicit request** (`src/coachOps/whatif.ts`,
+  `athlete_act` from the REST route only): no second hold, unless the nutrition floors changed the
+  number they saw; the clinician and posture floors still apply; a plan that moved since the answer
+  writes nothing.
+- **The Brief pushes neither of its recurring prompts.** Unanswered session feedback is never an
+  attention candidate or a lead (`today-attention.ts`); it lives on the session itself and its
+  absence is neutral. The morning check-in mounts quiet (`data-quiet`, one "Add how you feel" link)
+  when `signals.wearable_last_night` is true — last night's sleep or HRV under the one `isLastNight`
+  rule — and behaves as before with no wearable data.
+- **Coverage never adds a lift whose removal was for pain or an injury** (`droppedForPainReader`,
+  `src/repo/plan-coverage.ts`: an applied removal or swap whose reason, provenance, clinical stamp or
+  decision ties to pain); returning it is the pain-adaptation return's job.
 
 ## Background enrichment (`src/enrich.ts`)
 

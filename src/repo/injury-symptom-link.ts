@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { addDaysISO } from "./shared.js";
 import { symptomAreaSpokenWord, symptomAreaVocabularyLabel, symptomAreaVocabularyLabels } from "./symptom-area.js";
 
@@ -439,6 +440,103 @@ export function recentlySettledPlaces(on: string, days = 28): SettledPlace[] {
     });
   }
   return out;
+}
+
+// ---- the pain a change was made around: still open, settled, or not tied to one ----
+//
+// A plan change made around pain (a race adaptation that rested a lift for a sore knee)
+// comes back on its own only once THAT pain has settled (autonomy-service.ts
+// returnPainAdaptations). The same reads as above, asked of the change's own words:
+//   - open: anything open — an active area symptom (a legacy unconfirmed row counts), or
+//     an injury the symptom tie leaves open — names the place the words name, OR loads a
+//     lift the return would bring back. The lifecycle decides, never a freshness ladder:
+//     a symptom is open until the athlete closes it, however long ago they last spoke.
+//   - settled: nothing is open there, and the symptom the change's provenance names (else
+//     a resolved same-place symptom from the SAME episode — written no earlier than just
+//     before its onset and no later than its resolution) stands resolved.
+//   - untied: nothing open, and no resolved symptom the words can be tied to — absence is
+//     never the evidence that closes a pain, so the caller does not treat this as settled.
+// Null when a table could not be read: the caller changes nothing on it.
+export type PainEpisodeState = { state: "open" } | { state: "settled"; place: SettledPainPlace } | { state: "untied" };
+
+export function painEpisodeState(input: {
+  texts: readonly string[];
+  written_on: string | null;
+  /** Symptom ids the change's own reason provenance names; they decide when all exist. */
+  symptom_ids?: readonly number[];
+  lifts: ReadonlyArray<{ name?: string | null; muscle_group?: string | null }>;
+  on: string;
+}): PainEpisodeState | null {
+  const on = String(input.on ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) return null;
+  const openPlaces = openPainPlacesOn(on);
+  if (openPlaces == null) return null;
+  const texts = input.texts.map((t) => String(t ?? "")).filter((t) => t.trim());
+  for (const place of openPlaces) {
+    if (texts.some((text) => samePlace(text, place) || samePlace(place, text))) return { state: "open" };
+    if (input.lifts.some((lift) => lift?.name && painAreaLoadsExercise(place, lift))) return { state: "open" };
+  }
+  // The change's own provenance names its symptom: that row decides, never a lookalike.
+  const namedIds = [...new Set((input.symptom_ids ?? []).map(Number).filter((id) => id > 0))];
+  if (namedIds.length) {
+    let named: any[];
+    try {
+      named = db
+        .prepare(
+          `SELECT id, area_text, status, onset_on, resolved_on FROM training_symptom_events
+            WHERE id IN (${namedIds.map(() => "?").join(", ")})`
+        )
+        .all(...namedIds) as any[];
+    } catch {
+      return null;
+    }
+    if (named.length === namedIds.length) {
+      const stillOpen = named.some(
+        (row) => String(row.status) === "active" || row.resolved_on == null || String(row.resolved_on) > on
+      );
+      if (stillOpen) return { state: "open" };
+      const latest = [...named].sort((a, b) => String(b.resolved_on).localeCompare(String(a.resolved_on)))[0];
+      return {
+        state: "settled",
+        place: {
+          symptom_id: Number(latest.id),
+          area_text: String(latest.area_text ?? ""),
+          onset_on: String(latest.onset_on ?? ""),
+          resolved_on: String(latest.resolved_on ?? ""),
+          spoken_place: spokenPlace(texts[0] ?? "", String(latest.area_text ?? "")),
+        },
+      };
+    }
+  }
+  const resolved = resolvedAreaSymptomsOn(on);
+  if (resolved == null) return null;
+  const writtenOn = String(input.written_on ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(writtenOn)) return { state: "untied" };
+  for (const text of texts) {
+    const lower = text.toLowerCase();
+    if (!PAIN_TALK.test(lower) || STRUCTURAL_INJURY.test(lower)) continue;
+    // The SAME episode: the change was written during it — after (just before) its onset
+    // and no later than its resolution. A same-place symptom that had already settled
+    // when the change was written is an earlier episode, and says nothing about this one.
+    const match = resolved.find((symptom) => {
+      const from = addDaysISO(symptom.onset_on, -EPISODE_WINDOW_DAYS);
+      if (!from || writtenOn < from || writtenOn > symptom.resolved_on) return false;
+      return samePlace(text, symptom.area_text);
+    });
+    if (match) {
+      return {
+        state: "settled",
+        place: {
+          symptom_id: match.id,
+          area_text: match.area_text,
+          onset_on: match.onset_on,
+          resolved_on: match.resolved_on,
+          spoken_place: spokenPlace(text, match.area_text),
+        },
+      };
+    }
+  }
+  return { state: "untied" };
 }
 
 /**

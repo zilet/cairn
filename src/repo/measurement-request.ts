@@ -447,13 +447,11 @@ function policyFor(need: MeasurementNeedKey, reason: string): CadencePolicy {
  * Null is the common answer. Returns a card only when a need fires AND the
  * schedule says the request may be made today.
  *
- * PURE READ — never writes. The candidate's own priority (16) sits above the
- * quiet `lately` state card and below the goal check-in, so on a day with
- * anything real to show it lands behind the "more" disclosure and on a quiet day
- * it is inline — which is exactly when an ask for one small thing is welcome.
- * Whether it actually landed inline is not known until every candidate is ranked,
- * so this function cannot itself decide whether the request was genuinely seen;
- * call `reconcileMeasurementRequestAttention` once placement is known.
+ * PURE READ — never writes. A PULL card (`pull: true`): it never takes an inline
+ * slot, and waits behind the "more" disclosure until the measurement lands, the need
+ * lapses, or the person waves it off. Today's agenda leaves the `lab_recheck` card
+ * out altogether (a lab follow-up is on the doctor list). Placement is the arbiter's,
+ * so call `reconcileMeasurementRequestAttention` once it is known.
  */
 export function measurementRequestCandidate(asOf: string = localDateISO()): TodayAgendaCandidate | null {
   const request = currentMeasurementRequest(asOf);
@@ -467,7 +465,8 @@ export function measurementRequestCandidate(asOf: string = localDateISO()): Toda
   return {
     id: `measurement-request-${request.need.replace(/_/g, "-")}`,
     kind: request.need === "lab_recheck" ? "health" : "fuel",
-    tier: "primary",
+    tier: "more",
+    pull: true,
     priority: 16,
     kicker: line.kicker,
     title: line.title,

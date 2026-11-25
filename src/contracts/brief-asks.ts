@@ -3,12 +3,13 @@
 //
 // PULL, NEVER PUSH: a question here waits on the Brief for the athlete to open it — no
 // notification, no badge, no nag — and each one is asked at most ONCE:
-//   - `trip_lift`: the evening before a planned lift day inside a trip, "Lifting on the
-//     trip?" — yes (nothing changes) / easier (a bodyweight version for that one day) /
-//     skip it (the day rests). Remembered on the trip, per day.
-//   - `adaptation_return`: a race adaptation made around pain whose return went
+//   - `trip_lift`: RETIRED as a question — the coach lays the lighter trip version down
+//     the day before, with its Undo (brief-asks.ts routeTripVersions). The kind and its
+//     answers (yes / easier / skip) stay so an older client's card still answers, harmlessly.
+//   - `adaptation_return`: a race adaptation on the clinician floor whose return went
 //     unanswered comes back once, on the one day it was stamped for; left unanswered it
-//     settles to keeping the adaptation (src/repo/plan-adaptation-asks.ts).
+//     settles to keeping the adaptation (src/repo/plan-adaptation-asks.ts). One made
+//     around pain alone is never asked: it comes back by itself once the pain settles.
 // Never a gate: every answer is optional, and the day goes on as planned without one.
 
 export type BriefAskKind = "trip_lift" | "adaptation_return";

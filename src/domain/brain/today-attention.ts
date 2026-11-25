@@ -32,7 +32,6 @@
 // decision) to absence — which the client renders exactly as it does today.
 // ============================================================================
 
-import { db } from "../../db.js";
 import { listVisibleInsights } from "../../repo/insights.js";
 import { localDateISO } from "../../repo/shared.js";
 
@@ -62,8 +61,8 @@ export interface TodayAttention {
 // ---- the internal ranking (NEVER serialized — see the header) ---------------
 // The bands, in plain language:
 //   BRIEF_NEWS      the Brief has something new to say → nothing outranks it.
-//   FEEDBACK        a finished session waiting on its one-tap read. Bound to a
-//                   moment that passes: asked today about work done today.
+//   (session feedback is NOT a candidate: an unanswered "how did that feel?" is
+//   neutral, never a lead and never an attention item — it lives on the session.)
 //   INSIGHT_NEW     a cross-domain connection surfaced for the first time.
 //   WEEKLY_NEW      a fresh, unacknowledged weekly read.
 //   BRIEF_SETTLED   the Brief repeating itself — it yields to genuine news only.
@@ -72,7 +71,6 @@ export interface TodayAttention {
 //   FUEL
 const RANK = {
   BRIEF_NEWS: 100,
-  FEEDBACK: 80,
   INSIGHT_NEW: 70,
   WEEKLY_NEW: 60,
   BRIEF_SETTLED: 50,
@@ -92,27 +90,6 @@ function safe<T>(fn: () => T, fallback: T): T {
   } catch {
     return fallback;
   }
-}
-
-// Is a session logged today still waiting on its 1-tap autoregulation read?
-// Mirrors the client's own gate exactly (`hasLoggedSets` in today-session-
-// controller.ts + `hasFeedback` in today-session-status-client.ts) so the server
-// never names a lead the client cannot render. A narrow query on purpose:
-// `getSessionByDate` hydrates sets, skips and the daily composition, and this
-// runs on every Brief serve.
-function feedbackAwaiting(date: string): boolean {
-  const row = db
-    .prepare(
-      `SELECT s.soreness AS soreness, s.performance AS performance, s.joint_pain AS joint_pain,
-              (SELECT COUNT(*) FROM logged_sets ls WHERE ls.session_id = s.id) AS set_count
-         FROM sessions s WHERE s.date = ? ORDER BY s.id LIMIT 1`
-    )
-    .get(date) as { soreness: unknown; performance: unknown; joint_pain: unknown; set_count: unknown } | undefined;
-  if (!row) return false;
-  if (!(Number(row.set_count) > 0)) return false;
-  const given =
-    row.soreness != null || row.performance != null || (row.joint_pain != null && String(row.joint_pain).trim() !== "");
-  return !given;
 }
 
 type ReadState = "none" | "new" | "seen";
@@ -184,7 +161,6 @@ export function decideTodayAttention(
 
     const state = safe(() => briefState(read), "new_read" as TodayAttentionBriefState);
     const reads = safe(() => insightStates(), { insight: "none" as ReadState, weekly: "none" as ReadState });
-    const awaiting = safe(() => feedbackAwaiting(date), false);
     // Fuel rides on the read the Brief already computed — no extra query, and the
     // two can never disagree. Only "behind" is asking for anything right now.
     const fuelBehind = record(record(read.signals).fuel).bucket === "behind";
@@ -194,7 +170,6 @@ export function decideTodayAttention(
     const candidates: Array<{ surface: TodayAttentionSurface; rank: number }> = [
       { surface: "brief", rank: state === "new_read" ? RANK.BRIEF_NEWS : RANK.BRIEF_SETTLED },
     ];
-    if (awaiting) candidates.push({ surface: "feedback", rank: RANK.FEEDBACK });
     if (reads.insight !== "none") {
       candidates.push({ surface: "insight", rank: reads.insight === "new" ? RANK.INSIGHT_NEW : RANK.INSIGHT_SEEN });
     }

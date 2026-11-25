@@ -215,6 +215,8 @@ export interface ClientTodayAgendaCandidate {
   // A genuinely-new attention item waiting behind the "more" disclosure — the
   // client may whisper "· one new" on the collapsed summary (pull, never push).
   waiting?: boolean;
+  // A pull-only card: the server never places it inline; it always arrives in `more`.
+  pull?: boolean;
 }
 
 export interface ClientTodayAgenda {

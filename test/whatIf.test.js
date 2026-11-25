@@ -383,6 +383,92 @@ test("Do it on a calorie target always waits on the athlete", async () => {
   assert.equal(decisionFor(out.proposal_id).autonomy_tier, "ask");
 });
 
+// ---------- the tap is the yes ----------
+
+const ctxOf = (d) => (typeof d?.context === "string" ? JSON.parse(d.context) : (d?.context ?? {}));
+const reviewRowsFor = (proposalId) =>
+  repo.listBrainDecisions({ status: "review", limit: 50 }).filter((d) => d.source_ref_key === String(proposalId));
+
+test("the athlete's own tap on a calorie target is their yes: no second hold", async () => {
+  const out = whatIfDo({
+    athlete_act: true,
+    job_id: await answeredJob("What if I ate more?", {
+      change: {
+        kind: "nutrition",
+        summary: "Eat a little more on lifting days.",
+        nutrition: { target_kcal: 2300, protein_g: 170 },
+      },
+      ripple: [],
+    }),
+  });
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.ok(["landed", "lands"].includes(out.state), out.state);
+  assert.equal(reviewRowsFor(out.proposal_id).length, 0, "nothing waits on the athlete after their tap");
+  assert.equal(ctxOf(decisionFor(out.proposal_id)).explicit_user_request, true);
+});
+
+test("a tapped calorie number the nutrition floors had to move is not the card's number: it waits on the athlete", async () => {
+  const out = whatIfDo({
+    athlete_act: true,
+    job_id: await answeredJob("What if I ate a lot less?", {
+      change: { kind: "nutrition", summary: "Eat much less for a while.", nutrition: { target_kcal: 600, protein_g: 170 } },
+      ripple: [],
+    }),
+  });
+  assert.equal(out.ok, true, JSON.stringify(out));
+  const proposal = repo.getProposal(out.proposal_id);
+  assert.notEqual(proposal.parsed.nutrition.target_kcal, 600, "the floor moved it");
+  assert.equal(proposal.parsed.what_if_floor_moved, true);
+  assert.equal(proposal.status, "draft", "not landed on the tap");
+  assert.equal(reviewRowsFor(out.proposal_id).length, 1, "held for a yes, as before");
+  assert.equal(out.state, "waiting");
+});
+
+test("a tap on an answer whose plan moved lands while its lifts still stand (announce_first): no hold", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "announce_first" });
+  const jobId = await answeredJob("What if I added a bench set?", AGENT_ANSWER);
+  repo.savePlanDay(1, "Push", "Chest", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 125 },
+  ]);
+  const out = whatIfDo({ job_id: jobId, athlete_act: true });
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(out.plan_moved, true);
+  assert.equal(out.state, "lands", "announced, with its Undo");
+  assert.equal(reviewRowsFor(out.proposal_id).length, 0);
+});
+
+test("a tap on an answer whose lift has left the plan writes nothing and asks nothing", async () => {
+  seedPlan();
+  const jobId = await answeredJob("What if I added a bench set?", AGENT_ANSWER);
+  repo.savePlanDay(1, "Push", "Chest", [
+    { exercise: "Incline Dumbbell Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 50 },
+  ]);
+  const before = tableCounts();
+  const out = whatIfDo({ job_id: jobId, athlete_act: true });
+  assert.equal(out.ok, false);
+  assert.equal(out.state, "refused");
+  assert.equal(out.plan_moved, true);
+  assert.deepEqual(out.tried, []);
+  assert.equal(tableCounts().plan_proposals, before.plan_proposals, "no draft");
+  assert.equal(tableCounts().brain_decisions, before.brain_decisions, "no hold");
+});
+
+test("a tap never overrides the clinician floor, and review_everything still asks", async () => {
+  seedPlan();
+  const clinicalText = "What if I added a bench set now that my doctor cleared the shoulder injury?";
+  const clinical = whatIfDo({ job_id: await answeredJob(clinicalText, AGENT_ANSWER), athlete_act: true });
+  assert.equal(clinical.state, "clinician");
+  assert.equal(repo.getPlanDay(1).items[0].sets, 3, "a clinical change never lands on a tap");
+  repo.setSettings({ lead_mode: "review_everything" });
+  const posture = whatIfDo({
+    job_id: await answeredJob("What if I added a bench set?", AGENT_ANSWER),
+    athlete_act: true,
+  });
+  assert.equal(posture.state, "waiting");
+  assert.equal(ctxOf(decisionFor(posture.proposal_id)).review_reason_code, "review_posture", "their own posture");
+});
+
 test("a protein-only target is completed from the active target, and the athlete can approve it", async () => {
   repo.setNutritionTarget({ target_kcal: 2100, protein_g: 150, source: "manual" });
   const ask = {

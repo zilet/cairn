@@ -5,7 +5,8 @@
 //      in days, so twelve days out never reads "1 wk out".
 //   2. A plan day's focus follows the race build's leg trim (plan-day-focus.ts words it,
 //      plan-day-trim.ts reads it — the stress budget's own code, never re-derived).
-//   4. The trip-eve question: the evening before a lift day inside a trip, once.
+//   4. The trip day: never asked — the coach lays the lighter trip version down the day
+//      before, through autonomy with its Undo, once per trip day.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
@@ -21,9 +22,16 @@ import {
   briefAsks,
   easierTripChanges,
   easierTripMessage,
+  routeTripVersions,
 } from "../dist/domain/today/brief-asks.js";
 import { tripEventOn } from "../dist/repo/travel-days.js";
-import { expirePlanAdaptations, revertDecision } from "../dist/domain/brain/autonomy-service.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
+import {
+  applyDueAnnouncedDecisions,
+  domainIsDemoted,
+  expirePlanAdaptations,
+  revertDecision,
+} from "../dist/domain/brain/autonomy-service.js";
 import { activePlanAdaptations, adaptationDecisionWords } from "../dist/repo/plan-adaptations.js";
 import { receiptFromPlanAdaptation } from "../dist/repo/change-receipt.js";
 import { runWithTimeZone } from "../dist/tz.js";
@@ -181,53 +189,191 @@ test("today's strength line carries the trim in its focus on the trimmed day, ne
   assert.doesNotMatch(line.text, /taper/i, "the one line keeps its own words");
 });
 
-// ---------- 4. the trip-eve question ----------
+// ---------- 4. the trip day, laid down instead of asked ----------
 
-test("the evening before a lift day inside a trip, the Brief asks once — never in the morning, never without a trip", (t) => {
-  seedRaceWeek(t, `${THURSDAY}T18:30:00`);
-  const evening = briefAsks({ date: THURSDAY, now: new Date(`${THURSDAY}T18:30:00`) });
-  assert.equal(evening.asks.length, 1);
-  const [ask] = evening.asks;
-  assert.equal(ask.kind, "trip_lift");
-  assert.equal(ask.key, `trip_lift:${FRIDAY}`);
-  assert.equal(ask.question, "Lifting on the trip?");
-  assert.match(ask.detail, /Lower/);
-  assert.match(ask.detail, /Clearwater/);
-  assert.deepEqual(
-    ask.answers.map((a) => a.key),
-    ["yes", "easier", "skip"]
-  );
-  assert.doesNotMatch(JSON.stringify(evening), SCORE);
-  assert.equal(
-    briefAsks({ date: THURSDAY, now: new Date(`${THURSDAY}T09:00:00`) }).asks.length,
-    0,
-    "the evening's question"
-  );
-  assert.equal(
-    briefAsks({ date: TUESDAY, now: new Date(`${TUESDAY}T19:00:00`) }).asks.length,
-    0,
-    "Wednesday is no lift day"
-  );
+const tripDecision = (proposalId) =>
+  repo
+    .listBrainDecisions({ limit: 50 })
+    .find((row) => row.source_ref_type === "plan_proposal" && row.source_ref_key === String(proposalId));
 
-  const yes = answerBriefAsk({ key: ask.key, answer: "yes", date: THURSDAY });
-  assert.equal(yes.ok, true, JSON.stringify(yes));
-  assert.equal(tripEventOn(FRIDAY).lift_answers[FRIDAY], "yes", "remembered on the trip");
-  assert.equal(briefAsks({ date: THURSDAY, now: new Date(`${THURSDAY}T20:00:00`) }).asks.length, 0, "asked once");
+test("a lift day inside a trip is never asked about: the coach lays the trip version down with its Undo (lead)", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T09:00:00`);
+  repo.setSettings({ lead_mode: "lead" });
+  for (const now of [`${THURSDAY}T09:00:00`, `${THURSDAY}T18:30:00`]) {
+    assert.equal(briefAsks({ date: THURSDAY, now: new Date(now) }).asks.length, 0, "no trip-eve question");
+  }
+  assert.equal(routeTripVersions({ date: TUESDAY }).status, "none", "Wednesday is no lift day");
+
+  const routed = routeTripVersions({ date: THURSDAY });
+  assert.equal(routed.status, "routed", JSON.stringify(routed));
+  assert.equal(routed.date, FRIDAY);
+  assert.equal(routed.tier, "quiet_apply", "a one-day layer that restores itself is bounded: it lands by itself");
+  // Never on the eve: Thursday's plan day is still the plan as written.
+  const pending = tripDecision(routed.proposal_id);
+  assert.equal(pending.status, "pending");
+  assert.equal(pending.effective_date, FRIDAY, "it lands the morning of the trip day");
+  assert.deepEqual(repo.getPlanDay(1).items.map((i) => i.exercise), LOWER.map((i) => i.exercise), "not on the eve");
+  // The trip day's boundary lands it.
+  assert.deepEqual(applyDueAnnouncedDecisions(FRIDAY).applied, [pending.id]);
+  const names = repo.getPlanDay(1).items.map((i) => i.exercise);
+  assert.ok(names.includes("Bodyweight Squat"), names.join(", "));
+  const rows = db.prepare(`SELECT status, until_date, layer FROM plan_adaptations WHERE proposal_id = ?`).all(routed.proposal_id);
+  assert.ok(rows.length >= 3 && rows.every((r) => r.status === "active" && r.until_date === FRIDAY && r.layer === "trip"));
+  const decision = tripDecision(routed.proposal_id);
+  assert.equal(decision.status, "applied");
+  assert.equal(decision.reversible, true, "server-owned Undo");
+  assert.ok(repo.getBrainRollback(decision.id), "a rollback snapshot rides it");
+  assert.equal(tripEventOn(FRIDAY).lift_defaults[FRIDAY], routed.proposal_id, "remembered on the trip");
+  const proposal = repo.getProposal(routed.proposal_id);
+  assert.doesNotMatch(`${proposal.parsed.summary} ${proposal.parsed.rationale}`, /\byou must\b|\bshould\b|\bmissed\b/i);
+  for (const text of [proposal.parsed.summary, proposal.parsed.rationale]) assert.ok(!violatesReadingGrammar(text), text);
+  assert.doesNotMatch(JSON.stringify(proposal.parsed), SCORE);
+
+  // Handled once: the next pass writes nothing.
+  const before = repo.listProposals(50).length;
+  assert.equal(routeTripVersions({ date: THURSDAY }).status, "done");
+  assert.equal(repo.listProposals(50).length, before);
+
+  // The Undo is "as planned", remembered: the day is never offered again.
+  const undone = revertDecision(Number(decision.id), "user undo");
+  assert.equal(undone.ok, true, JSON.stringify(undone));
+  assert.deepEqual(repo.getPlanDay(1).items.map((i) => i.exercise), LOWER.map((i) => i.exercise));
+  assert.equal(routeTripVersions({ date: THURSDAY }).status, "done", "an Undo is never re-offered");
+  assert.equal(repo.listProposals(50).length, before);
+  assert.deepEqual(repo.getPlanDay(1).items.map((i) => i.exercise), LOWER.map((i) => i.exercise));
+
+  assert.equal(briefAsks({ date: THURSDAY, now: new Date(`${THURSDAY}T20:00:00`) }).asks.length, 0);
+  // And its Undo is a fact about one hotel room, never a vote against the coach: even a
+  // run of undone trip versions leaves the training domain leading.
+  const insert = db.prepare(
+    `INSERT INTO brain_decisions (kind, domain, summary, source, status, autonomy_tier, risk_class, reversible)
+     VALUES ('exercise_rotation', 'training', 'trip day', 'trip-version', 'reverted', 'quiet_apply', 'low', 1)`
+  );
+  for (let i = 0; i < 4; i++) insert.run();
+  assert.equal(domainIsDemoted("training"), false);
+});
+
+test("a trip version is laid down only over a short trip that names both its days", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T09:00:00`, { trip: false });
+  repo.setSettings({ lead_mode: "lead" });
+  const tryTrip = (event) => {
+    db.prepare(`DELETE FROM context_events WHERE kind = 'trip'`).run();
+    repo.addContextEvent({ kind: "trip", title: "Away", ...event });
+    return routeTripVersions({ date: THURSDAY });
+  };
+  assert.equal(tryTrip({}).status, "none", "an undated trip");
+  assert.equal(tryTrip({ start_date: FRIDAY }).status, "none", "a start-only (open-ended) trip");
+  assert.equal(tryTrip({ start_date: FRIDAY, end_date: "2026-11-20" }).status, "none", "a stay longer than two weeks");
+  assert.equal(repo.listProposals(50).length, 0, "nothing written");
+  assert.deepEqual(repo.getPlanDay(1).items.map((i) => i.exercise), LOWER.map((i) => i.exercise));
+  assert.equal(tryTrip({ start_date: FRIDAY, end_date: "2026-11-02" }).status, "routed", "a bounded one does");
+});
+
+test("a trip edit that drops the trip's memory never lays the same day down twice", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T09:00:00`);
+  repo.setSettings({ lead_mode: "announce_first" });
+  const routed = routeTripVersions({ date: THURSDAY });
+  revertDecision(Number(tripDecision(routed.proposal_id).id), "user hold");
+  db.prepare(`UPDATE context_events SET meta_json = '{}' WHERE kind = 'trip'`).run();
+  assert.equal(routeTripVersions({ date: THURSDAY }).status, "done", "the draft itself remembers the day");
+  assert.equal(repo.listProposals(50).filter((p) => p.agent === "trip-version").length, 1);
+});
+
+test("no trip on the day: nothing is laid down and nothing is asked", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T18:30:00`, { trip: false });
+  assert.equal(briefAsks({ date: THURSDAY, now: new Date(`${THURSDAY}T18:30:00`) }).asks.length, 0);
+  assert.equal(routeTripVersions({ date: THURSDAY }).status, "none");
+  assert.equal(repo.listProposals(50).length, 0);
+});
+
+test("announce_first announces the trip version for the trip day; a Hold is the athlete's no and is remembered", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T09:00:00`);
+  repo.setSettings({ lead_mode: "announce_first" });
+  const routed = routeTripVersions({ date: THURSDAY });
+  assert.equal(routed.status, "routed", JSON.stringify(routed));
+  assert.equal(routed.tier, "announce");
+  const decision = tripDecision(routed.proposal_id);
+  assert.equal(decision.status, "announced");
+  assert.equal(decision.effective_date, FRIDAY, "it lands the morning of the trip day");
+  assert.deepEqual(repo.getPlanDay(1).items.map((i) => i.exercise), LOWER.map((i) => i.exercise), "not yet");
+  const held = revertDecision(Number(decision.id), "user hold");
+  assert.equal(held.ok, true, JSON.stringify(held));
+  assert.equal(repo.getProposal(routed.proposal_id).status, "superseded");
+  assert.equal(routeTripVersions({ date: THURSDAY }).status, "done", "a Hold is never re-offered");
+  assert.equal(repo.listBrainDecisions({ status: "review", limit: 50 }).length, 0, "nothing waits on the athlete");
+});
+
+test("announce_first: a trip version whose trip is gone by its morning is withdrawn quietly, never parked", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T09:00:00`);
+  repo.setSettings({ lead_mode: "announce_first" });
+  const routed = routeTripVersions({ date: THURSDAY });
+  assert.equal(routed.tier, "announce");
+  db.prepare(`UPDATE context_events SET archived = 1 WHERE kind = 'trip'`).run();
+  const result = applyDueAnnouncedDecisions(FRIDAY);
+  assert.equal(result.applied.length, 0);
+  assert.equal(repo.getProposal(routed.proposal_id).status, "superseded");
+  assert.equal(tripDecision(routed.proposal_id).status, "canceled");
+  assert.equal(repo.listBrainDecisions({ status: "review", limit: 50 }).length, 0, "never a question");
+  assert.deepEqual(repo.getPlanDay(1).items.map((i) => i.exercise), LOWER.map((i) => i.exercise));
+});
+
+test("review_everything holds the trip version (their own posture); once its day passes it is retired quietly", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T09:00:00`);
+  repo.setSettings({ lead_mode: "review_everything" });
+  const routed = routeTripVersions({ date: THURSDAY });
+  assert.equal(routed.status, "routed");
+  assert.equal(routed.tier, "ask");
+  const hold = repo.listBrainDecisions({ status: "review", limit: 50 });
+  assert.equal(hold.length, 1, "one hold, from the person's own posture");
+  assert.equal(hold[0].context.review_reason_code, "review_posture");
+  assert.equal(briefAsks({ date: THURSDAY, now: new Date(`${THURSDAY}T18:30:00`) }).asks.length, 0, "no second ask on the Brief");
+  const later = routeTripVersions({ date: SATURDAY });
+  assert.deepEqual(later.retired, [routed.proposal_id]);
+  assert.equal(repo.getProposal(routed.proposal_id).status, "superseded");
+  assert.equal(repo.listBrainDecisions({ status: "review", limit: 50 }).length, 0);
+});
+
+test("an older client's answer to the retired trip card answers the version already laid down", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T09:00:00`);
+  repo.setSettings({ lead_mode: "lead" });
+  const routed = routeTripVersions({ date: THURSDAY });
+  assert.equal(routed.tier, "quiet_apply");
+  const easier = answerBriefAsk({ key: `trip_lift:${FRIDAY}`, answer: "easier", date: THURSDAY });
+  assert.equal(easier.ok, true, JSON.stringify(easier));
+  assert.equal(easier.proposal_id, routed.proposal_id, "no second trip version beside the first");
+  assert.equal(repo.listProposals(50).filter((p) => /trip/.test(p.agent)).length, 1);
   assert.equal(
-    answerBriefAsk({ key: ask.key, answer: "skip", date: THURSDAY }).ok,
+    answerBriefAsk({ key: `trip_lift:${FRIDAY}`, answer: "yes", date: THURSDAY }).ok,
     false,
     "an answered day stays answered"
   );
-  assert.deepEqual(
-    repo.getPlanDay(1).items.map((i) => i.exercise),
-    LOWER.map((i) => i.exercise),
-    "yes changes nothing"
-  );
 });
 
-test("no trip on the day: no question", (t) => {
-  seedRaceWeek(t, `${THURSDAY}T18:30:00`, { trip: false });
-  assert.equal(briefAsks({ date: THURSDAY, now: new Date(`${THURSDAY}T18:30:00`) }).asks.length, 0);
+test("'yes, as planned' from an older client takes the laid trip version back, and is remembered", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T09:00:00`);
+  repo.setSettings({ lead_mode: "lead" });
+  const routed = routeTripVersions({ date: THURSDAY });
+  applyDueAnnouncedDecisions(FRIDAY);
+  assert.ok(repo.getPlanDay(1).items.some((i) => i.exercise === "Bodyweight Squat"));
+  const yes = answerBriefAsk({ key: `trip_lift:${FRIDAY}`, answer: "yes", date: THURSDAY });
+  assert.equal(yes.ok, true, JSON.stringify(yes));
+  assert.deepEqual(repo.getPlanDay(1).items.map((i) => i.exercise), LOWER.map((i) => i.exercise));
+  assert.equal(tripDecision(routed.proposal_id).status, "reverted", "taken back by its own Undo");
+  assert.equal(tripEventOn(FRIDAY).lift_answers[FRIDAY], "yes");
+  assert.equal(routeTripVersions({ date: THURSDAY }).status, "done");
+});
+
+test("a trip read that fails lays nothing down", (t) => {
+  seedRaceWeek(t, `${THURSDAY}T09:00:00`);
+  db.exec(`ALTER TABLE context_events RENAME TO context_events_away`);
+  try {
+    const out = routeTripVersions({ date: THURSDAY });
+    assert.notEqual(out.status, "routed");
+    assert.equal(repo.listProposals(50).length, 0, "nothing written");
+  } finally {
+    db.exec(`ALTER TABLE context_events_away RENAME TO context_events`);
+  }
+  assert.deepEqual(repo.getPlanDay(1).items.map((i) => i.exercise), LOWER.map((i) => i.exercise));
 });
 
 test("'skip it' holds the trip day as rest through the calendar's own claim; the ring is untouched", (t) => {
@@ -289,7 +435,7 @@ test("the route and the MCP mirror read and answer the same questions", async (t
     });
   const read = await call(route("get", "/today-asks"), { query: { date: THURSDAY } });
   assert.equal(read.date, THURSDAY);
-  assert.equal(read.asks[0]?.key, `trip_lift:${FRIDAY}`);
+  assert.deepEqual(read.asks, [], "the trip day is no longer asked");
   const tools = new Map();
   registerDayCoachTools({ tool: (name, _d, _s, fn) => tools.set(name, fn) });
   assert.ok(tools.has("get_today_asks"));
@@ -298,6 +444,7 @@ test("the route and the MCP mirror read and answer the same questions", async (t
     viaMcp.asks.map((a) => a.key),
     read.asks.map((a) => a.key)
   );
+  // An older client still holding the retired card can answer it, harmlessly.
   const answered = await call(route("post", "/today-asks/answer"), {
     body: { key: `trip_lift:${FRIDAY}`, answer: "yes", date: THURSDAY },
   });
@@ -311,15 +458,12 @@ test("the route and the MCP mirror read and answer the same questions", async (t
 
 // ---------- review fixes (wave 2) ----------
 
-test("the trip-eve hour is the athlete's device zone, never the host clock", (t) => {
+test("the trip day is never asked, in any zone or hour", (t) => {
   seedRaceWeek(t, `${THURSDAY}T18:30:00`);
   const LA = "America/Los_Angeles";
-  // 18:30 Thursday in Los Angeles is 01:30 Friday UTC.
-  const evening = runWithTimeZone(LA, () => briefAsks({ date: THURSDAY, now: new Date("2026-10-23T01:30:00Z") }));
-  assert.equal(evening.asks.length, 1, "their evening asks");
-  // 16:30 UTC is 09:30 in Los Angeles: their morning, so no question.
-  const morning = runWithTimeZone(LA, () => briefAsks({ date: THURSDAY, now: new Date("2026-10-22T16:30:00Z") }));
-  assert.equal(morning.asks.length, 0, "their morning stays quiet");
+  for (const now of ["2026-10-23T01:30:00Z", "2026-10-22T16:30:00Z"]) {
+    assert.equal(runWithTimeZone(LA, () => briefAsks({ date: THURSDAY, now: new Date(now) })).asks.length, 0);
+  }
 });
 
 function lowerSlots() {
