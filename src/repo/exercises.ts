@@ -493,12 +493,15 @@ export function loggedDayCount(id: number): number {
 // Three kinds of new name, three different laws:
 //   casing      "Dead hang" → "Dead Hang"           deterministic, lands everywhere, no question asked
 //   respelling  "Seated Leg Press - Machine" → "Seated Leg Press"   the same lift; an agent may land it
-//   rewording   "Abs Crunch Rope Pull Overhead" → "Cable Crunch"    maybe the same lift; a PERSON decides
+//   rewording   "Squat" → "Back Squat"              the same lift in other words; a PERSON decides
+//   unrelated   "Abs Crunch Rope Pull Overhead" → "Cable Crunch"    no structural tie: two lifts
 // A person's rename always lands (or folds into the row that already carries the
-// name). An agent's goes through the identity guard; what the guard cannot vouch
-// for is PARKED on `suggested_name` for a yes/no instead of being dropped. The
-// logged numbers never move and the id is stable; a rename is display text plus an
-// alias so the old spelling keeps resolving.
+// name). An agent's goes through the identity guard: a rewording (the same key, or one
+// name's tokens inside the other's) is PARKED on `suggested_name` — pull-only
+// housekeeping on the lift's own detail sheet and the Tidy list, never a card or a
+// count — and an unrelated proposal changes nothing and records nothing. The logged
+// numbers never move and the id is stable; a rename is display text plus an alias so
+// the old spelling keeps resolving.
 
 // The casing the canon would give a stored name when that is the ONLY difference.
 function casingRetitleFor(name: string): string | null {
@@ -557,6 +560,27 @@ function sameLiftRespelling(row: any, into: string): boolean {
   if (!relaxed || relaxed !== implementRelaxedExerciseKey(into)) return false;
   const side = (n: string) => ({ name: n, group: row.muscle_group ?? null, mode: row.mode ?? null });
   return validateExerciseMergePlan(side(name), side(into)).ok;
+}
+
+// Is `into` STRUCTURALLY the same lift as the stored row — the same movement key, or one
+// name's tokens inside the other's — once held to the merge guards (mode, assisted,
+// variation tokens)? A pair that only shares a muscle group is not: that relation admits
+// genuinely different movements. The only shape a parked `suggested_name` may take.
+function structurallySameLift(row: any, into: string): boolean {
+  const side = (n: string) => ({ name: n, group: row.muscle_group ?? null, mode: row.mode ?? null });
+  const verdict = validateExerciseMergePlan(side(String(row.name)), side(into));
+  return verdict.ok === true && verdict.relation !== "group-only";
+}
+
+/**
+ * The parked name a person may be shown for this row, or null. A suggestion parked before
+ * the structural rule (a group-only pair, a fresh row with no evidence) is a different
+ * lift, not a question, so it is never surfaced.
+ */
+export function visibleSuggestedName(row: { name?: unknown; suggested_name?: unknown; muscle_group?: unknown; mode?: unknown }): string | null {
+  const suggested = String(row?.suggested_name ?? "").trim();
+  if (!suggested) return null;
+  return structurallySameLift(row, suggested) ? suggested : null;
 }
 
 // Is `into` a LESS canonical spelling of the stored `name`? Either the alias table already
@@ -632,18 +656,13 @@ export function renameExercise(
       // Only STRUCTURAL evidence (the same key, or one name's tokens inside the other's)
       // folds on an agent's word — even for a row nothing references yet, because the
       // alias a fold writes sends every future log of that spelling into the other lift's
-      // history ("Nordic Curl" into "Leg Curl"). A pair that merely shares a group, or a
-      // fresh row with no group evidence either way, waits on suggested_name for a yes; a
-      // pair the guards call different movements (or two trained lifts) is rejected.
-      const refs = exerciseReferenceCount(id);
-      const unreferenced = refs.logs === 0 && refs.plan === 0;
-      const softRefusal = !verdict.ok && verdict.reason === "different muscle groups";
-      if (!verdict.ok && !(unreferenced && softRefusal)) {
-        return { ok: false, id, name, outcome: "rejected", reason: verdict.reason ?? "merge refused" };
-      }
+      // history ("Nordic Curl" into "Leg Curl"). Without it the two are simply two lifts:
+      // a pair that merely shares a group, a fresh row with no group evidence either way,
+      // or a pair the guards call different movements keeps its own name, and NOTHING is
+      // recorded for the person to answer (no parked question, no alias).
+      if (!verdict.ok) return { ok: false, id, name, outcome: "rejected", reason: verdict.reason ?? "merge refused" };
       if (!shouldAutoApplyMerge(verdict, "high")) {
-        db.prepare(`UPDATE exercises SET suggested_name = ? WHERE id = ?`).run(String(other.name), id);
-        return { ok: false, id, name, outcome: "suggested", reason: "may be the same lift as one you have — waiting for a yes" };
+        return { ok: true, id, name, outcome: "unchanged", reason: "two different lifts — the name stays as it is" };
       }
     }
     const merged = mergeExercises(name, String(other.name));
@@ -654,8 +673,10 @@ export function renameExercise(
 
   // 3. A genuinely new name. A person's word lands. An agent's must be the same lift
   //    respelled, or the row must be unreferenced (a freshly-added movement nobody has
-  //    logged yet); anything else is parked for the person to answer, unless they
-  //    already said no to exactly this.
+  //    logged yet). A rewording of the SAME lift that changes the words the person typed
+  //    (the same key, or one name's tokens inside the other's) is parked for their
+  //    yes/no, unless they already said no to exactly this; a proposal with no structural
+  //    tie to the name is a different lift, so the name stays and nothing is parked.
   if (!byPerson) {
     if (cur.refused_name && normalizeExerciseName(String(cur.refused_name)) === intoNorm) {
       return { ok: false, id, name, outcome: "refused", reason: "declined before" };
@@ -669,8 +690,11 @@ export function renameExercise(
     const refs = exerciseReferenceCount(id);
     const unreferenced = refs.logs === 0 && refs.plan === 0;
     if (!unreferenced && !sameLiftRespelling(cur, into)) {
+      if (!structurallySameLift(cur, into)) {
+        return { ok: true, id, name, outcome: "unchanged", reason: "a different lift — the name stays as it is" };
+      }
       db.prepare(`UPDATE exercises SET suggested_name = ? WHERE id = ?`).run(into, id);
-      return { ok: false, id, name, outcome: "suggested", reason: "reads like a different movement — waiting for a yes" };
+      return { ok: false, id, name, outcome: "suggested", reason: "rewords the name you gave it — waiting for a yes" };
     }
   }
   // The old name may have mapped to the wrong FIT enum; the clean one deserves a
@@ -745,9 +769,9 @@ export function applyExerciseEnrichment(
   let workingId = id;
   let name = String(cur.name);
 
-  // The ONE rename chokepoint decides: casing lands, a same-lift respelling lands,
-  // a proposal the identity guard cannot vouch for is PARKED as a suggestion (never
-  // silently dropped — that is how a Garmin-shaped title survived every pass). The
+  // The ONE rename chokepoint decides: casing lands, a same-lift respelling lands, a
+  // rewording of the same lift is parked for the person's yes/no, and a proposal with no
+  // structural tie leaves the name as it is (two lifts, nothing to answer). The
   // FIT re-score is deferred to the end of this function so the agent's own
   // shortlist pick, applied below, wins over the deterministic floor.
   const proposed = String(fields.canonical ?? "").trim();
@@ -1639,5 +1663,16 @@ export function getExerciseDetail(name: string) {
   // sheet is the one place a human can answer the question the matcher could not.
   // Never both: a linked guide means there is nothing left to ask.
   const guide_suggestion = guide ? null : getGuideSuggestionForExercise(String(ex.name));
-  return { found: true, ...ex, progress: getProgress(ex.name), recent, appears, guide, guide_suggestion };
+  // A parked name is housekeeping the person meets only here, on the lift itself — and
+  // only one that rewords the same lift (visibleSuggestedName).
+  return {
+    found: true,
+    ...ex,
+    suggested_name: visibleSuggestedName(ex),
+    progress: getProgress(ex.name),
+    recent,
+    appears,
+    guide,
+    guide_suggestion,
+  };
 }

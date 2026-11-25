@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**420 routes** across 138 groups.
+**421 routes** across 138 groups.
 
 ## `/activities`
 
@@ -674,6 +674,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | PUT | `/api/plan/:day` |  |
 | POST | `/api/plan/:day/order-for-effect` | Quiet "Order for effect" — rewrite one day's items into compounds → accessories → finishers → cardio. Returns the day (unchanged when already ordered). 200 + null when the day number is absent — same absence shape as other single-row lookups. |
 | PUT | `/api/plan/:day/target` |  |
+| GET | `/api/plan/coverage-preview` | What the daily coverage pass WOULD change next, read-only: nothing is drafted or written. |
 | GET | `/api/plan/day-detail` | One calendar day opened (Horizon's tap-a-day view, Today's "what's ahead" strip): the day's focus, the lift's exercises with the progression's loads, the run's distance, zone, pace band and quality structure, why the day sits where it does, where to pay attention, and what was done. Read-only. 400 on a malformed date; 200 + null past the end of next week (nothing is forecast there). Registered ahead of /plan/:day. |
 | GET | `/api/plan/look-ahead` | The Program landing's look-ahead: today through the end of next week, a row a day (the lift day's name and key movements, the calendar's runs and rest), with the week's context (race-build rung, recovery or deload week). Read-only; registered ahead of /plan/:day, which would otherwise take "look-ahead" for a day number. |
 | GET | `/api/plan/quality` |  |

@@ -269,6 +269,13 @@ type TodayRailDeps = {
           });
           return;
         }
+        if (kind === "goal_checkin_confirm") {
+          // "Still my goal": restart the stable clock, and the card goes now.
+          const card = button.closest(".agenda-card");
+          if (card) deps.collapseEl(card, () => card.remove());
+          void deps.api("/goal-checkin/confirm", { method: "POST" }).catch(() => {});
+          return;
+        }
         if (kind.startsWith("chat")) {
           deps.gotoChatWith(typeof payload === "string" ? payload : candidate?.title || "");
           return;

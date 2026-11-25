@@ -116,7 +116,8 @@ import { setAppStateStrict } from "../../repo/app-state.js";
 import { recordAsyncFailure } from "../../diagnostics.js";
 import { addDaysISO, localDateISO, parseDbTime } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
-import { refreshPreparedDayForPlanChange } from "../../repo/adaptive-session.js";
+import { activeCompositionPlanDayNumber, refreshPreparedDayForPlanChange } from "../../repo/adaptive-session.js";
+import { COVERAGE_AGENT, coverageAddsLift, coverageChangeStillFits } from "../../repo/plan-coverage.js";
 import {
   isPersonSuperseded,
   mismatchedChangeKeys,
@@ -362,8 +363,8 @@ function liveReviewHoldsForProposal(proposalId: number): ParkedDecision[] {
 // each leading with the group), in plain words — never the set arithmetic. Null when
 // the draft carries no unresolved volume finding and no coverage sentence of its own.
 function volumeFloorHoldReason(proposal: any): string | null {
-  // A standing coverage ask (coverage-ask.ts) is held on the same floor, but its draft
-  // FIXES the gap rather than opening one, so it carries its own sentence.
+  // A coverage change (coverage-change.ts) held for a yes FIXES a gap rather than opening
+  // one, so it carries its own sentence in the asking register.
   const coverage = proposal?.parsed?.coverage_gap?.explanation;
   if (typeof coverage === "string" && coverage.trim()) return coverage.trim().slice(0, 700);
   const unresolved = Array.isArray(proposal?.parsed?.volume_floor_unresolved)
@@ -449,8 +450,11 @@ function holdProposalForReview(
       proposal_id: proposal.id,
       review_reason_code: input.code,
       reason_provenance: proposalReasonProvenance(proposal),
-      // The waiting surface speaks a hold's own sentence; a volume-floor hold has one.
-      ...(input.code === "safety_floor" && volumeFloorHoldReason(proposal)
+      // The waiting surface speaks a hold's own sentence; a volume-floor hold has one, and
+      // so does a coverage change — but only when the hold IS the coverage review (policy
+      // asked for the person's yes), never a hold for an unrelated reason.
+      ...((input.code === "safety_floor" || (isCoverageChange(proposal) && COVERAGE_REVIEW_CODES.has(input.code))) &&
+      volumeFloorHoldReason(proposal)
         ? { user_explanation: volumeFloorHoldReason(proposal) }
         : {}),
     },
@@ -762,6 +766,49 @@ function proposalRollbackPayload(rollback: any, result: any): any {
     };
   }
   return rollback.previous;
+}
+
+// ---- the plan-coverage change (domain/brain/coverage-change.ts) ------------------
+//
+// A server-computed draft that closes a standing coverage gap. It rides this ordinary
+// path like any other change; three things about it are read off the draft itself, so
+// every route (the daily pass, a thaw re-offer under a changed lead mode, the boundary
+// pass) treats it the same way:
+//   - an added lift is structural: it asks to be ANNOUNCED (a requested tier only ever
+//     tightens policy; review_everything still asks);
+//   - it lands at a natural boundary: never into a session already composed on a day it
+//     touches (a started one already waits, quietApplyMustWait) — the template changes for
+//     the sessions ahead;
+//   - its premise is the plan rows it edits (coverageChangeStillFits), not the generic
+//     evidence fingerprint: a set logged since it was made changes nothing about it, so a
+//     drift there is tolerated while the premise holds, and a premise that is gone
+//     withdraws it quietly instead of parking it as a question.
+// The review codes that mean "policy held THIS change for the person's yes" — the only
+// holds a coverage draft speaks its own gap sentence on.
+const COVERAGE_REVIEW_CODES: ReadonlySet<string> = new Set([
+  "review_posture",
+  "requested_review",
+  "domain_policy",
+  "user_lock",
+]);
+
+function isCoverageChange(proposal: any): boolean {
+  return String(proposal?.agent ?? "") === COVERAGE_AGENT && !!proposal?.parsed?.coverage_gap;
+}
+
+function coverageRequestedTier(proposal: any, requested: AutonomyTier | undefined): AutonomyTier | undefined {
+  if (!isCoverageChange(proposal) || !coverageAddsLift(proposal.parsed)) return requested;
+  return !requested || requested === "observe" || requested === "quiet_apply" ? "announce" : requested;
+}
+
+function coverageMustWait(proposal: any): boolean {
+  if (!isCoverageChange(proposal)) return false;
+  try {
+    const composed = activeCompositionPlanDayNumber(localDateISO());
+    return composed != null && proposalPlanDayNumbers(proposal).includes(composed);
+  } catch {
+    return true; // unknown: the next boundary is always safe
+  }
 }
 
 function quietApplyMustWait(shape: ProposalShape): boolean {
@@ -1336,6 +1383,15 @@ export function applyProposalWithAutonomy(
   const proposalFreshness = proposalNeedsEvidenceFreshness(shape)
     ? verifyProposalEvidenceFreshness(proposal.parsed, localDateISO())
     : null;
+  // A coverage change is held to its own premise (isCoverageChange above). Anything but
+  // `fits` — the gap closed, this is a held week, or a read failed — withdraws it quietly:
+  // never a question, and the daily pass reads the plan afresh. `fits`: evidence drift
+  // elsewhere is moot.
+  const coveragePremise = isCoverageChange(proposal) ? coverageChangeStillFits(proposal.parsed, localDateISO()) : null;
+  if (coveragePremise != null && coveragePremise !== "fits" && !input.explicit_user_request) {
+    setProposalStatus(Number(proposal.id), "superseded", { recordDecision: false });
+    return { ok: true, applied: false, superseded: true, reason: `coverage premise ${coveragePremise}` };
+  }
   const storedProposalEvidence = proposalEvidenceSnapshot(proposal.parsed);
   const scheduledProposalEvidence =
     storedProposalEvidence ??
@@ -1352,6 +1408,7 @@ export function applyProposalWithAutonomy(
   if (
     proposalFreshness &&
     !input.explicit_user_request &&
+    coveragePremise !== "fits" &&
     (proposalFreshness.status === "changed" || proposalFreshness.status === "unverified")
   ) {
     // Regenerate rather than ask: the athlete cannot adjudicate a fingerprint diff, and
@@ -1435,11 +1492,12 @@ export function applyProposalWithAutonomy(
   // input here, so the provenance is read off the proposal itself.
   const athleteAsked = shape.kind === "training_structure" && isAthleteRequestedRestructure(proposal);
   const explicitRequest = !!input.explicit_user_request || athleteAsked;
+  const requestedTier = coverageRequestedTier(proposal, input.requested_tier);
   const policy = decideAutonomyTier({
     kind: shape.kind,
     risk_class: clinical ? "clinical" : shape.risk,
     reversible: true,
-    requested_tier: input.requested_tier,
+    requested_tier: requestedTier,
     lead_mode: leadMode,
     magnitude: nutritionDelta,
     user_locked: input.user_locked,
@@ -1478,7 +1536,7 @@ export function applyProposalWithAutonomy(
           : ["This change was explicitly routed for review."],
       tier: policy.tier,
       policy_inputs: {
-        requested_tier: input.requested_tier ?? null,
+        requested_tier: requestedTier ?? null,
         lead_mode: leadMode,
         user_locked: !!input.user_locked,
         clamp_refused: !!input.clamp_refused,
@@ -1579,7 +1637,7 @@ export function applyProposalWithAutonomy(
     };
   }
 
-  if (quietApplyMustWait(shape) && !input.explicit_user_request) {
+  if ((quietApplyMustWait(shape) || coverageMustWait(proposal)) && !input.explicit_user_request) {
     const effectiveDate = nextBoundary(shape.kind);
     if (input.today_scoped && effectiveDate !== localDateISO()) {
       return holdTodayScopedProposal(proposal, shape, effectiveDate);
@@ -3743,6 +3801,25 @@ export function applyDueAnnouncedDecisions(
           ? verifyProposalEvidenceSnapshot(decisionEvidence as any, asOf)
           : verifyProposalEvidenceFreshness(proposal.parsed, asOf)
         : null;
+      // A coverage change is held to its own premise at the boundary too, holds included:
+      // a gap that closed, or a week that is held (a light window, a trip, a protective
+      // reduction in force), withdraws it quietly — the daily pass re-reads the plan once
+      // the hold passes, and nothing becomes a question. A read that failed waits a day.
+      // Standing and unheld, a logged set or a context note since it was made is no reason
+      // to hold it.
+      const coveragePremise = isCoverageChange(proposal) ? coverageChangeStillFits(proposal.parsed, asOf) : null;
+      if (coveragePremise === "gone" || coveragePremise === "held") {
+        setProposalStatus(proposalId, "superseded", { recordDecision: false });
+        if (getBrainDecision(announced.id!)?.status !== "canceled") transitionBrainDecision(announced.id!, "canceled");
+        recordFailure(announced.id!, "canceled_moot");
+        continue;
+      }
+      if (coveragePremise === "unknown") {
+        const next = addDaysISO(asOf, 1) ?? asOf;
+        patchBrainDecision(announced.id!, { effective_date: next });
+        delayed.push(announced.id!);
+        continue;
+      }
       // AN ATHLETE'S REQUEST IS HONOURED, NOT HELD. The compare-and-set gate below exists
       // so an AUTOMATIC change is never applied over a picture it was not drafted
       // against. A restructure the athlete asked for is different in kind:
@@ -3833,6 +3910,7 @@ export function applyDueAnnouncedDecisions(
         boundaryFreshness &&
         !(athleteAsked && contextOnlyDrift) &&
         !requestDriftTolerated &&
+        coveragePremise !== "fits" &&
         (boundaryFreshness.status === "changed" || boundaryFreshness.status === "unverified")
       ) {
         const regenerated = attemptStaleDraftRegeneration(proposal, shape, {

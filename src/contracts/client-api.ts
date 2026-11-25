@@ -60,6 +60,8 @@ export interface ClientTodayAgendaAckResponse extends ClientOkResponse {
 
 export interface ClientTodayAgendaDismissResponse extends ClientOkResponse {
   id: string;
+  /** True when the card's own hold was set (holdTodayAgendaDismissal): it stays off. */
+  held?: boolean;
 }
 
 // One failed agent attempt recorded by the propose→apply loop (`runAgentWithFallback`
@@ -4516,6 +4518,7 @@ export interface ClientApiResponses {
   "/api/today-agenda": ClientTodayAgenda;
   "/api/today-agenda/ack": ClientTodayAgendaAckResponse;
   "/api/today-agenda/dismiss": ClientTodayAgendaDismissResponse;
+  "/api/goal-checkin/confirm": ClientOkResponse;
   "/api/today-asks": import("./brief-asks.js").BriefAsks;
   "/api/today-asks/answer": import("./brief-asks.js").BriefAskAnswerResult;
   "/api/today/stones": TodayStonesRead;

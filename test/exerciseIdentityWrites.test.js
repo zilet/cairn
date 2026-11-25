@@ -233,13 +233,13 @@ test("an agent rename onto another stored lift is a merge, and passes the merge 
   assert.equal(refused.outcome, "rejected", "different lifts: never folded on an agent's word");
   assert.ok(findExerciseExact(STORED) && findExerciseExact("Cable Fly"));
 
-  // A pair that only shares a muscle group waits for a person's yes instead.
+  // A pair that only shares a muscle group is two lifts: nothing merges, nothing is asked.
   const hammer = insertEx("Hammer Curl", "biceps");
   logDays(hammer, 1);
-  const parked = renameExercise(hammer, STORED, { source: "agent" });
-  assert.equal(parked.outcome, "suggested");
-  assert.equal(findExerciseExact("Hammer Curl")?.suggested_name, STORED);
-  assert.ok(findExerciseExact("Hammer Curl"), "nothing merged yet");
+  const kept = renameExercise(hammer, STORED, { source: "agent" });
+  assert.equal(kept.outcome, "unchanged");
+  assert.equal(findExerciseExact("Hammer Curl")?.suggested_name ?? null, null, "no question is parked");
+  assert.ok(findExerciseExact("Hammer Curl"), "nothing merged");
 
   // A person's word still folds it.
   const merged = renameExercise(hammer, STORED, { source: "person" });

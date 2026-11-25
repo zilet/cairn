@@ -12,7 +12,7 @@ import { raceDays } from "../domain/training/race-days.js";
 import {
   advanceBlockWeek,
   applyProposal,
-  applySwapSmart,
+  applySwapByPerson,
   buildSwapProposal,
   completeBlock,
   createBlock,
@@ -242,7 +242,7 @@ programRouter.post("/program/swap/apply", (req, res) => {
   // athlete's logged one), and when `from` isn't represented at all, the
   // variation is ADDED to the day already training that muscle group. The
   // response `message` says what actually happened.
-  res.json(applySwapSmart(from, to, Number.isFinite(Number(day)) ? Number(day) : null));
+  res.json(applySwapByPerson(from, to, Number.isFinite(Number(day)) ? Number(day) : null));
 });
 
 programRouter.get("/proposals", (req, res) => res.json(listProposals(req.query.limit ? Number(req.query.limit) : 20)));

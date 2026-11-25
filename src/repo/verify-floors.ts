@@ -468,7 +468,7 @@ export function planVolumeFloorViolations(
   ctx: VolumeFloorContext | null | undefined
 ): FloorViolation[] {
   // Which groups the draft leaves under their floor is plan-quality.ts's ONE definition
-  // (weeklyFloorShortfalls — the compiler's warning and the coverage ask read the same);
+  // (weeklyFloorShortfalls — the compiler's warning and the coverage change read the same);
   // only the grandfathering against the current week is this precheck's own question.
   const shortfalls = weeklyFloorShortfalls(candidate, ctx);
   if (!shortfalls.length) return [];

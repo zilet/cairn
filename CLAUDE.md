@@ -626,12 +626,14 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   read by every consumer AND by the `findOrCreateExercise` write chokepoint, so a spelling can never
   split one lift into two histories. Its `key` is the persisted `movement_key` shape — never widen
   it. **A stored name is retitled only through `renameExercise`**: casing lands everywhere at once,
-  a same-lift respelling may land from an agent, a rewording is PARKED on `suggested_name` for a
-  person's yes/no (never dropped, never forced), and "keep" is remembered on `refused_name`.
+  a same-lift respelling may land from an agent, a same-lift rewording is PARKED on `suggested_name`
+  (pull-only, on the lift's sheet), an unrelated name changes nothing and asks nothing, and "keep" is
+  remembered on `refused_name`.
   Details in `docs/ARCHITECTURE.md` "Exercise identity: one resolver".
 - **A lift's muscle group carries who set it** (`exercises.muscle_group_source`): an agent may fill an
   empty group or correct a `classifier` guess, never a person's. A swap into a slot's own lift is a
-  no-op, and a standing coverage gap is one declinable ask (`plan-coverage.ts`), never a new floor.
+  no-op, and a standing coverage gap is closed through ordinary autonomy with Undo, never a new floor
+  (`coverage-change.ts`).
   Details in `docs/ARCHITECTURE.md` "Exercise identity: one resolver".
 - **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
   as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.

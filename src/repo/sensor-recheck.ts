@@ -45,6 +45,7 @@ import {
   applyAttentionObservation,
   deleteAttentionSchedule,
   getAttentionSchedule,
+  upsertAttentionSchedule,
 } from "./attention.js";
 import { RECOVERY_BASELINE_LOOKBACK_DAYS, RECOVERY_BASELINE_MIN_POINTS } from "./baseline-bands.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
@@ -469,4 +470,27 @@ export function reconcileSensorRecheckAttention(asOf: string, surfaced: boolean)
       reason: recheck.reason,
     },
   });
+}
+
+/**
+ * The athlete waved the offer off (Today's ×). It has said its piece for this episode:
+ * the ladder goes straight to `released`, and it stays quiet until the episode itself
+ * ends (a new sleep / HRV / resting-heart-rate reading lands, and the reconcile above
+ * clears the row) — the same end state the ladder reaches on its own, only sooner.
+ * True when there was a live offer to release.
+ */
+export function dismissSensorRecheck(asOf: string = localDateISO()): boolean {
+  const recheck = sensorBaselineRecheck(asOf);
+  if (!recheck) return false;
+  if (!getAttentionSchedule(SIGNAL_KEY)) {
+    applyAttentionObservation({
+      signal_key: SIGNAL_KEY,
+      policy: RECHECK_POLICY,
+      observation: { checked_at: asOf, status: "active", source: SENSOR_RECHECK_SOURCE, reason: recheck.reason },
+    });
+  }
+  const entry = getAttentionSchedule(SIGNAL_KEY);
+  if (!entry) return false;
+  upsertAttentionSchedule({ ...entry, tier: "released", next_due: null, last_checked: asOf });
+  return true;
 }

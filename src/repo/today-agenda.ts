@@ -70,15 +70,20 @@ import { isProtectiveFuelAsk } from "./protective-fuel-draft.js";
 // integration time; import them now (do not stub). Each returns a fully-formed
 // TodayAgendaCandidate or null.
 import { sinceLastLookedCandidate } from "./since-last.js";
-import { goalCheckinCandidate } from "./goal-checkin.js";
+import { dismissGoalCheckin, goalCheckinCandidate } from "./goal-checkin.js";
 // The episodic-wearer's one calm offer: a night with the watch on would sharpen
 // the recovery read. Rides the shared attention schedule for its cooldown, so it
 // is made at most a handful of times and then goes quiet on its own.
-import { reconcileSensorRecheckAttention, sensorRecheckCandidate } from "./sensor-recheck.js";
+import { dismissSensorRecheck, reconcileSensorRecheckAttention, sensorRecheckCandidate } from "./sensor-recheck.js";
 // The one calm ask for a measurement a live derivation is blocked on. Same shape
 // as the sensor recheck: a pure producer here, and the attention ladder is only
 // ever spent once placement is known.
-import { measurementRequestCandidate, reconcileMeasurementRequestAttention } from "./measurement-request.js";
+import {
+  dismissMeasurementRequest,
+  measurementRequestCandidate,
+  reconcileMeasurementRequestAttention,
+} from "./measurement-request.js";
+import { dismissalDayCount, recordDismissal } from "./surface-dismissals.js";
 import { listBrainDecisions, recordDecision, saveBrainRollback } from "./brain-decisions.js";
 import { decideAutonomyTier } from "../brain/autonomy.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
@@ -107,6 +112,10 @@ export type TodayAgendaCandidate = {
   // underlying directive id: unchanged long-lived guidance keeps one revision,
   // while materially new evidence creates a new one and may surface again.
   revision?: string;
+  // The card's QUALITATIVE identity a Today × is held against (holdTodayAgendaDismissal):
+  // what kind of thing it says, not the numbers that move with every reading. Absent, the
+  // card's words are the identity.
+  dismiss_fact?: string;
   // A genuinely-new attention item waiting behind the "more" disclosure (the
   // surprise budget deferred or hasn't yet introduced it). Lets the client show
   // a quiet "· one new" cue on the disclosure — legible pull, never a push.
@@ -860,6 +869,13 @@ function standingMomentumCandidate(_date: string): TodayAgendaCandidate | null {
     body: "You're trending the right way — open your health standing for the full read.",
     action: { label: "See your standing", kind: "me-health-standing" },
     dismissible: true,
+    // Which wins it names (fat off, weight moving the right way, BP down) — never the
+    // numbers, which move with every weigh-in.
+    dismiss_fact: (Array.isArray(m.chips) ? m.chips : [])
+      .filter((chip: any) => chip?.dir === "good")
+      .map((chip: any) => String(chip?.kind ?? ""))
+      .sort()
+      .join(","),
   };
 }
 
@@ -994,6 +1010,52 @@ function latelyCandidate(date: string, weeklyStats?: any): TodayAgendaCandidate 
 // surprise allowance (write the intro ledger). The PWA's GET /api/today-agenda is
 // the one surface a human actually sees, so it records; the MCP tool passes false
 // so a coaching agent's read never marks a newcomer "introduced" nobody saw.
+// ---- a Today × that sticks --------------------------------------------------
+//
+// The × used to record evidence only (surface_dismissals) that no producer read, so a
+// dismissed card came back the next day. Now each dismissible card WITHOUT an
+// acknowledgement of its own holds the dismissal its own way:
+//   - goal-checkin: its existing dismiss (dismissGoalCheckin) — its 14-day cooldown;
+//   - sensor-recheck, measurement-request-<need>: the attention ladder goes straight to
+//     `released`, quiet until the episode ends (a new reading / the measurement lands
+//     or the need lapses), the same end state the ladder reaches by itself;
+//   - since-last, standing-momentum: keyed on the card's identity AND what it says
+//     (FACT-KEYED), so it stays off until its underlying fact changes.
+// Never held here: a card with its own ack (health read, cut quality), an announced
+// change (its own Hold), a plan decision, a clinician item — none is in these lists.
+const FACT_KEYED_DISMISSALS = new Set(["since-last", "standing-momentum"]);
+
+function factKey(candidate: TodayAgendaCandidate): string {
+  const fact = candidate.dismiss_fact ?? candidate.revision ?? `${candidate.title ?? ""}\n${candidate.body ?? ""}`;
+  return `${candidate.id}#${createHash("sha1").update(String(fact)).digest("hex").slice(0, 12)}`;
+}
+
+function factKeyedDismissed(candidate: TodayAgendaCandidate): boolean {
+  if (!FACT_KEYED_DISMISSALS.has(candidate.id)) return false;
+  try {
+    return dismissalDayCount("today_agenda", factKey(candidate)) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Make a Today × hold for this card (see above). True when the card's own hold was set. */
+export function holdTodayAgendaDismissal(id: string, date: string = localDateISO()): boolean {
+  const cardId = String(id ?? "").trim();
+  if (cardId === "goal-checkin") {
+    dismissGoalCheckin();
+    return true;
+  }
+  if (cardId === "sensor-recheck") return dismissSensorRecheck(date);
+  if (cardId.startsWith("measurement-request-")) return dismissMeasurementRequest(cardId, date);
+  if (FACT_KEYED_DISMISSALS.has(cardId)) {
+    const candidate = safe(() => (cardId === "since-last" ? sinceLastLookedCandidate(date) : standingMomentumCandidate(date)));
+    if (!candidate) return false;
+    return recordDismissal("today_agenda", factKey(candidate), date) || factKeyedDismissed(candidate);
+  }
+  return false;
+}
+
 export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = {}): TodayAgenda {
   const d = String(date || localDateISO());
   const hero = briefHero();
@@ -1049,6 +1111,13 @@ export function todayAgenda(date?: string, opts: { markIntroduced?: boolean } = 
   add(safe(() => sensorRecheckCandidate(d)));
   // Also a PURE read — the ask is only spent after placement, below.
   add(safe(() => measurementRequestCandidate(d)));
+
+  // A card the athlete waved off stays off while it says the same thing
+  // (holdTodayAgendaDismissal). Only the fact-keyed cards are read here; the others
+  // carry their own cooldown or ladder, which the dismissal already moved.
+  const shown = candidates.filter((c) => !factKeyedDismissed(c));
+  candidates.length = 0;
+  candidates.push(...shown);
 
   // Stable sort by priority desc. Array.prototype.sort is stable in modern V8, but
   // tie-break on insertion order explicitly so the budget split is deterministic.

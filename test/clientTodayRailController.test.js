@@ -338,3 +338,24 @@ test("revision dismiss waits for durable acknowledgement and stays visible when 
     ["collapse", card],
   ]);
 });
+
+test("'Still my goal' confirms the goal check-in and the card goes at once", async () => {
+  const rootEl = new FakeElement("section");
+  const card = rootEl.appendChild(new FakeElement("article", { className: "agenda-card", dataset: { agendaCard: "goal-checkin" } }));
+  const confirmBtn = card.appendChild(
+    new FakeElement("button", { dataset: { agendaAct: "goal_checkin_confirm", agendaId: "goal-checkin" } })
+  );
+  const { deps, calls } = makeDeps(rootEl);
+  const controller = loadController();
+  controller.wireGenericAgendaCards(
+    [{ id: "goal-checkin", action: { label: "Still my goal", kind: "goal_checkin_confirm", payload: { goal_mode: "lose" } } }],
+    deps
+  );
+  confirmBtn.click();
+  await flushRailLoaders();
+  assert.deepEqual(calls, [
+    ["collapse", card],
+    ["api", "/goal-checkin/confirm"],
+  ]);
+  assert.equal(card.removed, true);
+});

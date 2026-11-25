@@ -483,7 +483,10 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   // Mobility self-checks: +4 (log_mobility_check, list_mobility_checks, get_mobility_standing,
   // delete_mobility_check) in src/surfaces/mcp/body-metrics.ts — the mirrors of GET/POST
   // /api/mobility-checks, DELETE /api/mobility-checks/:id and GET /api/mobility-standing.
-  assert.equal(tools.length, 308,"tool count changes only for reviewed MCP additions");
+  // Coverage dry run: +1 (get_plan_coverage_preview) in src/surfaces/mcp/plan-exercises.ts —
+  // the mirror of GET /api/plan/coverage-preview, a pure read of what the daily coverage
+  // pass would change next.
+  assert.equal(tools.length, 309,"tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);

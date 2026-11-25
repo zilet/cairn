@@ -14,7 +14,7 @@ import {
   dayDetailDate,
   dedupeExercises,
   deleteExercise,
-  deletePlanDay,
+  deletePlanDayByPerson,
   detachGuide,
   ensureGuideImage,
   exerciseGuideStatus,
@@ -46,6 +46,7 @@ import {
   structureRedrawStatus,
 } from "../domain/brain/structure-request.js";
 import { getPlanWithPurpose } from "../repo.js";
+import { previewPlanCoverageChange } from "../domain/brain/coverage-change.js";
 import { liftAlternatives, liftVariations } from "../repo/exercise-suggestions.js";
 
 export const planExercisesRouter = Router();
@@ -84,6 +85,8 @@ planExercisesRouter.get("/plan/day-detail", (req, res) => {
   res.json(dayDetail(date));
 });
 planExercisesRouter.get("/plan/quality", (_req, res) => res.json(getPlanQuality()));
+// What the daily coverage pass WOULD change next, read-only: nothing is drafted or written.
+planExercisesRouter.get("/plan/coverage-preview", (_req, res) => res.json(previewPlanCoverageChange()));
 
 // The recovery-week story for the Plan surface: a waiting draft ('drafted'), the
 // applied lighter week in flight ('applied', ~a week from the apply stamp), or
@@ -209,7 +212,7 @@ planExercisesRouter.post("/plan/:day/order-for-effect", (req, res) => {
   }
 });
 
-planExercisesRouter.delete("/plan/:day", (req, res) => res.json(deletePlanDay(Number(req.params.day))));
+planExercisesRouter.delete("/plan/:day", (req, res) => res.json(deletePlanDayByPerson(Number(req.params.day))));
 
 planExercisesRouter.get("/exercises", (_req, res) => res.json(listExercises()));
 

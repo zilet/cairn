@@ -3,6 +3,7 @@ import {
   acknowledgeTodayAgendaCandidate,
   confirmGoalCheckin,
   dismissGoalCheckin,
+  holdTodayAgendaDismissal,
   learnedTimeline,
   sinceLastLookedCandidate,
   teamWeekRead,
@@ -185,7 +186,16 @@ todayRouter.post("/today-agenda/dismiss", (req, res) => {
   const id = String(req.body?.id ?? "").trim();
   if (!id) return res.status(400).json({ ok: false, error: "id required" });
   recordDismissal("today_agenda", id);
-  res.json({ ok: true, id });
+  // …and, for the cards with no acknowledgement of their own, the dismissal HOLDS
+  // (holdTodayAgendaDismissal: the card's own cooldown, its ladder released, or keyed
+  // on what it says). Best-effort: the dismiss itself never fails on it.
+  let held = false;
+  try {
+    held = holdTodayAgendaDismissal(id);
+  } catch {
+    held = false;
+  }
+  res.json({ ok: true, id, held });
 });
 
 // The Brief's quiet questions (src/domain/today/brief-asks.ts): the trip-eve "Lifting

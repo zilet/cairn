@@ -1415,24 +1415,30 @@ function cutVetoesPromotion(
   return false;
 }
 
+// The ONE construction of a day's cut pressure from its three reads.
+function cutPressureOf(
+  fuelTraining: unknown,
+  cut: ReturnType<typeof cutQualityRead> | null,
+  near_goal: boolean
+): CutPressure {
+  const hold = fuelTraining === "hold_aggression";
+  const reduce = fuelTraining === "reduce";
+  const sliding = !!cut?.active && cut.verdict === "sliding";
+  const fast_loss = !!cut?.active && cut.rate.vs_lean_safe === "above" && cut.verdict !== "sliding";
+  const deep = sliding || fast_loss;
+  return { hold, reduce, sliding, fast_loss, deep, any: hold || reduce || deep, near_goal };
+}
+
 function readCutPressure(date: string): CutPressure {
-  let hold = false;
-  let reduce = false;
-  let sliding = false;
-  let fast_loss = false;
+  let fuelTraining: unknown = null;
   try {
-    const fuel = currentUnderfuelingRead(date);
-    hold = fuel?.action?.training === "hold_aggression";
-    reduce = fuel?.action?.training === "reduce";
+    fuelTraining = currentUnderfuelingRead(date)?.action?.training;
   } catch {
     /* no fuel read → no pressure claimed */
   }
+  let cut: ReturnType<typeof cutQualityRead> | null = null;
   try {
-    const cut = cutQualityRead(date);
-    if (cut.active) {
-      sliding = cut.verdict === "sliding";
-      fast_loss = cut.rate.vs_lean_safe === "above" && cut.verdict !== "sliding";
-    }
+    cut = cutQualityRead(date);
   } catch {
     /* no cut read → no pressure claimed */
   }
@@ -1442,8 +1448,25 @@ function readCutPressure(date: string): CutPressure {
   } catch {
     /* no remaining read → not claimed near the destination */
   }
-  const deep = sliding || fast_loss;
-  return { hold, reduce, sliding, fast_loss, deep, any: hold || reduce || deep, near_goal };
+  return cutPressureOf(fuelTraining, cut, near_goal);
+}
+
+/**
+ * The same day's cut pressure for a caller that must FAIL CLOSED (the plan-coverage change,
+ * which edits the plan by itself): a read that throws throws, never "no pressure".
+ */
+export function readCutPressureStrict(date: string): CutPressure {
+  return cutPressureOf(currentUnderfuelingRead(date)?.action?.training, cutQualityRead(date), atOrNearGoal(date));
+}
+
+/** Cut pressure that refuses a SET increase — the set-count catch-up's own test (setCatchUp). */
+export function cutPressureRefusesSetIncrease(cut: CutPressure): boolean {
+  return cut.reduce && !cut.near_goal;
+}
+
+/** The fuel read leaves training as written — the test applyFuelProtection opens with. */
+export function fuelReadLeavesTrainingAlone(read: Pick<UnderfuelingRead, "action"> | null | undefined): boolean {
+  return read?.action?.training === "proceed";
 }
 
 // The cut read is expensive (it walks the goal check and the program state), so it
@@ -3563,7 +3586,7 @@ function recentExposureStart(
 // (within SET_STEP_WORKING_FRAC of that session's top load, reps logged) per session over
 // VOLUME_BOUNDS.HABITUAL_WINDOW_DAYS strictly BEFORE `before` — the weeks before the recent
 // exposures a catch-up answers. Null below VOLUME_BOUNDS.HABITUAL_MIN_SESSIONS sessions.
-function habitualWorkingSetCountBefore(name: string, before: string | null): number | null {
+export function habitualWorkingSetCountBefore(name: string, before: string | null): number | null {
   if (!before) return null;
   const from = addDaysISO(before, -VOLUME_BOUNDS.HABITUAL_WINDOW_DAYS);
   if (!from) return null;
@@ -3653,7 +3676,7 @@ function setCatchUp(
   if (ctx.liftState?.status === "regressing") return p;
   if (p.dose_eligibility?.reason === "unfinished" || p.dose_eligibility?.reason === "partial") return p;
   const cut = ctx.cut();
-  if (cut.reduce && !cut.near_goal) return p;
+  if (cutPressureRefusesSetIncrease(cut)) return p;
   // A deliberately light week — a recovery week in force or scheduled, a deload now or
   // next, a deload-due mesocycle, the race taper — is the same exemption the plan's
   // volume floor reads (volume-floor-context.ts), read last because it is the costly one.
@@ -3713,7 +3736,7 @@ function applyFuelProtection(
   atNearGoal = false
 ): Prescription {
   const say = <T>(set: readonly T[], code: string): T => voice.liftVoice(set, voiceDate, code, prescription.exercise);
-  if (read.action.training === "proceed") return prescription;
+  if (fuelReadLeavesTrainingAlone(read)) return prescription;
   // Prep is not loaded work. A fuel read must not invent a load story for it.
   if (isPrepMovement(prescription.exercise)) return prescription;
   if (read.action.training === "hold_aggression") {

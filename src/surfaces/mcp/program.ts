@@ -11,7 +11,7 @@ import { dexaTargeting } from "../../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
-  applySwapSmart,
+  applySwapByPerson,
   buildSwapProposal,
   createBlock,
   ensureActiveBlock,
@@ -302,7 +302,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
       to: z.string().describe("the same-pattern movement to rotate in"),
     },
     // Mirror of REST /program/swap/apply (MCP ⊆ REST) — one shared smart apply.
-    async ({ day, from, to }) => asText(applySwapSmart(from, to, day != null && Number.isFinite(day) ? day : null))
+    async ({ day, from, to }) => asText(applySwapByPerson(from, to, day != null && Number.isFinite(day) ? day : null))
   );
 
   server.tool(

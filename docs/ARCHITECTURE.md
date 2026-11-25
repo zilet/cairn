@@ -5436,7 +5436,14 @@ Machine" through fifty enrichment passes. Three kinds of new name now have three
 |---|---|---|
 | casing / whitespace only | "Dead hang" → "Dead Hang" | display text — lands immediately, everywhere: at boot (`normalizeExerciseTitles`), on every `findOrCreateExercise` hit, inside `dedupeExercises` (`retitles`, reported on the dry run) and at the top of Tidy |
 | the same lift respelled | "Seated Leg Press - Machine" → "Seated Leg Press" | `sameExerciseIdentity` OR a station word only (`implementRelaxedExerciseKey` equality held to `validateExerciseMergePlan`) — an agent may land it on a logged row |
-| a rewording | "Abs Crunch Rope Pull Overhead" → "Cable Crunch" | maybe the same lift — an agent's proposal is PARKED on `exercises.suggested_name` for a one-tap yes/no; a person's rename always lands |
+| a rewording of the same lift | "Squat" → "Back Squat" | the same key or one name's tokens inside the other's, changing the words the person typed — an agent's proposal is PARKED on `exercises.suggested_name` for a yes/no; a person's rename always lands |
+| an unrelated name | "Abs Crunch Rope Pull Overhead" → "Cable Crunch" | no structural tie: two lifts. An agent's proposal changes nothing and records nothing (no parked question, no alias) |
+
+A parked name is pull-only housekeeping: it appears on the lift's own detail sheet ("Call it that" /
+"Keep") and in the Tidy result list, never on Today, as a badge or in a count. The detail read
+(`getExerciseDetail`) shows it only while it is still a structural rewording of the current name
+(`visibleSuggestedName`), so a suggestion parked under the older, wider rule stays hidden. The
+exercise-guide yes/no ("Looks like X — use its guide?") lives on the same sheet only.
 
 A proposal that names a row that already exists folds this row into it (`mergeExercises`, its own
 guards). Every landed rename keeps the id and the logged numbers, repoints the by-name references
@@ -5519,8 +5526,8 @@ only to a row its cluster named, and echoes stored names in every receipt. An AG
 another stored row is a merge and passes the same guards first (`validateExerciseMergePlan` then
 a structural relation). Only structural evidence (same key, a token subset) folds on an agent's
 word, even for a row nothing references yet, since the fold's alias routes every future log of that
-spelling into the other lift; a group-only pair, or a fresh row with no group evidence, is parked on
-`suggested_name`. An agent never makes a display name LESS canonical: a proposal that is the alias
+spelling into the other lift; a group-only pair, or a fresh row with no group evidence, is two lifts:
+the row keeps its name and nothing is parked. An agent never makes a display name LESS canonical: a proposal that is the alias
 side of the row, or an abbreviation of its spelled-out name ("DB" for "Dumbbell"), is `unchanged`.
 A person's rename still folds directly.
 
@@ -5535,29 +5542,80 @@ that name would get (`seedGroupSource`: `table` where the curated tables settle 
 `classifier`); `test/seedExerciseGroups.test.js` holds every seed row to that. Work no group can count is named in the balance read (`programBalanceRead`,
 `src/repo/program-balance-read.ts`: `ungrouped`, `ungrouped_note`), never dropped.
 
-**A standing coverage gap is one ask** (`src/repo/plan-coverage.ts`,
-`src/domain/brain/coverage-ask.ts`) — a floored group under its floor or a missing movement family
-in the plan of record is raised after a person's plan save and by a daily pass
-(`plan_coverage_check_date`) as ONE server-derived draft held on the refused-floor ask (in-app only:
-nothing notifies). The gap is judged on the STANDING plan as written against the intent alone
-(`readPlanCoverage`); everything that varies week to week is a HOLD instead — a light window the
-floor stands aside for, a block's realization week, the post-race window, a trip, an affirmed cut, and per element an
-endurance-carried group (two OR six weeks) or a strength-led taper's legs. Under a hold nothing new
-is raised and nothing open is withdrawn; an open ask is withdrawn only when the plan itself closed its
-gap, its offer no longer fits the plan (`coverageOfferStillFits`: the slots it bumps changed, a lift
-it adds is already there, an injury now loads one), or a new gap folds into one ask. An answer is
-keyed by fingerprint (gap + intent) with the planned count at the time, and holds until the plan
-gives that group `COVERAGE_REASK_WORSE_BY` (2) fewer counted sets; a lift swap at the same volume is
-not news. The ask reads only open and answered rows, never withdrawn ones; a read that FAILED is
-`unavailable` and raises and withdraws nothing. "Under the floor" has ONE definition,
+**A standing coverage gap is closed by the coach, and said** (`src/repo/plan-coverage.ts`,
+`src/domain/brain/coverage-change.ts`) — a floored group under its floor or a missing movement family
+in the plan of record is closed by a daily pass (`plan_coverage_check_date`, `closePlanCoverageGap`)
+with ONE bounded step for ONE gap (`coverageRemedy`). **Which gap first** (`rankCoverageGaps`): a
+movement family the week leaves out entirely, then floored groups by how far under the floor they
+sit relative to it ((low - planned) / low), ties in the floor's own order; the first gap that can be
+stepped honestly is taken. **Per-pass caps**: at most `COVERAGE_PASS_SET_CAP` (2) added sets in all,
+one per lift per round, only on lifts already in the plan with an ESTABLISHED habit and room under
+~1.2x it (`VOLUME_BOUNDS`, the set-count catch-up's own rule: no habit, no raise) and the group's
+weekly bound; else ONE added lift the athlete has real logged history with (at least two sessions,
+no constraint note), at its minimum dose of two sets; else nothing — the gap stays a fact in
+`coverage_gaps` for the next redraw. A step short of the whole gap says "a first step", and the
+sentence names no amount except the applied deltas in the summary. Never onto a lift an open
+injury, a pain report in words (`activeRelevantTrainingSymptoms`) or stated pain in the band window
+(`painBandForMovement`) covers, never onto a slot or stored lift with a constraint note, never an
+"add" of a lift already in the plan (by the resolver or its key), never a lower set count or a
+rewritten rep range. A read-only dry run (`previewPlanCoverageChange`, REST `GET
+/api/plan/coverage-preview`, MCP `get_plan_coverage_preview`) returns exactly what the next pass
+would route. It is routed through the ORDINARY autonomy path
+— no refused-floor clamp — so server policy picks the tier: a set bump is a `training_target`
+(quiet_apply under lead, announce when the domain is demoted, announce under announce_first, ask
+under review_everything); a remedy that adds a lift asks to be announced (`coverageAddsLift`, read
+off the draft by `applyProposalWithAutonomy`), so lead and announce_first announce it and
+review_everything asks. Whatever lands carries the server-owned Undo, a rollback snapshot and the
+decision's falsifiable `exercise_target_completion` expectation per touched lift; it shows in the
+Changes feed (and an announced one as Today's "NEXT BOUNDARY" card with Hold this), never as "NEEDS
+YOUR DECISION" unless the lead mode itself asks — then exactly one held draft whose waiting sentence
+is the gap in the asking register. In-app only: nothing notifies. **The natural boundary**: a quiet
+change never lands into a session already started (`quietApplyMustWait`) or composed on a day it
+touches (`coverageMustWait`); it waits for tomorrow's boundary pass. **Its premise is the plan rows
+it edits** (`coverageChangeStillFits`: `fits` / `gone` / `held` / `unknown` — its gaps still stand,
+none is held this week, `coverageOfferStillFits`), checked at the first gate and at the boundary in
+place of the generic evidence fingerprint: a set logged since is no reason to hold it; gone or held
+withdraws it quietly (never a question); a failed read waits a day at the boundary. The gap is
+judged on the STANDING plan as written against the intent alone (`readPlanCoverage`); everything that
+varies week to week is a HOLD instead — a light window the floor stands aside for, a block's
+realization week, the post-race window, a trip, an affirmed cut, every PROTECTIVE REDUCTION still
+in force (`protectiveHold`: the fuel read protecting training, cut pressure refusing a set increase
+or sliding anchors, a volume restore still owed, a plan adaptation — the same predicates
+`setCatchUp` refuses on: `fuelReadLeavesTrainingAlone`, `cutPressureRefusesSetIncrease`,
+`openVolumeRestoreTargets`), and per element an endurance-carried group (two OR six weeks) or a
+strength-led taper's legs. Every one of these reads FAILS CLOSED: a read that throws makes the pass
+`unavailable`. Under a hold nothing new
+is changed and nothing open is withdrawn; an open draft (in flight or held) is withdrawn only when
+the plan itself closed its gap, its offer no longer fits the plan (the slots it bumps changed, a lift
+it adds is already there, an injury now loads one), or a new gap folds into one held draft. **The
+athlete's no is remembered** (`coverageAnswers`, keyed by fingerprint = gap + intent, with the
+planned count at the time): a held draft set aside, an announced change held ("Hold this": the
+decision canceled `held_by_user`), a landed change undone (the decision `reverted`), or a gap the
+person's OWN direct plan write created or deepened — their editor save, a day they deleted, an
+in-session swap, or a named-slot edit they asked for (an `explicit_user_request` / `byPersonRequest`
+`changes[]` apply made in that turn, never a draft the orphan sweep adopts) — all through ONE chokepoint, `withPersonAuthoredCoverage` (the standing read
+just before the write against the one after; `recordPersonKeptCoverage`; it ends when the gap closes).
+An agent's, a redraw's or an autonomy write never counts, nor a whole new week the person asked for
+(`days`: the agent authored the week) — each holds until the plan gives
+that group `COVERAGE_REASK_WORSE_BY` (2) fewer counted sets; a lift swap at the same volume is not
+news. A landed change that stands holds nothing. **One change at a time**: an in-flight change means
+nothing new, and a gap whose last landed change has a touched lift not logged since it landed
+(`coverageSettlingKeys`, the `slotAuthorship` untested rule on the landing day) is `settling` until
+the log shows it done or the change's own completion expectation window closes. **A person's write
+never edits the plan back** (`settlePlanCoverageAfterSave`, called by `savePlanDayByPerson`,
+`replacePlanByPerson`, `deletePlanDayByPerson`, `applySwapByPerson`): it withdraws a draft the
+write closed and leaves any gap it did not make to the daily pass. The first
+version's held refused-floor drafts (`safety_floor`) are withdrawn quietly on the first acting pass
+and the gap re-decided by policy. The pass reads only open and answered rows, never server-withdrawn
+ones; any read that FAILED is `unavailable` and changes and withdraws nothing. "Under the floor" has ONE definition,
 `weeklyFloorShortfalls` (`plan-quality.ts`, both coverage answers off one arithmetic pass in
-`planCoverageShortfalls`), read by the compiler's warning, the redraw precheck and this ask. The
+`planCoverageShortfalls`), read by the compiler's warning, the redraw precheck and this pass. The
 standing gaps reach the plan-shaping prompts as `DATA.coverage_gaps`, built from the coach slice's own
 plan and floor context and agreeing with what the floor enforces now: a gap the week holds, one the
 endurance work carries or the taper trims, and one an open injury loads carry `held` (the reason in
 plain words, and the prompt leaves it alone); a declined one carries `declined:true` (left unless the
-athlete asks). Its declined lookup is bounded (`declinedCoverage`: answered rows only, newest first,
-stopping once every gap met its newest answer). Floors and thresholds are unchanged,
+athlete asks; a person-made gap counts). Its declined lookup is bounded (`declinedCoverage`:
+answered rows only, newest first, stopping once every gap met its newest answer). Floors and thresholds are unchanged,
 and the same-lift-twice check keys on `resolveExerciseName` identity.
 
 ## Exercise guides (`src/repo/exercise-guide.ts`, `src/domain/training/exercise-guide-use-case.ts`)
@@ -5949,6 +6007,17 @@ provenance rides the contract: `observed_only` on `CoachPersonalModifier` and bo
 "comparable decisions" about outcomes on decisions that were only ever considered — a sentence
 outrunning its evidence — and a surface that cannot tell the two apart cannot word itself honestly.
 Prose slots are rationed the same way (`OBSERVED_ONLY_PROSE_SLOTS`).
+
+**A Today × holds for the cards with no acknowledgement of their own**
+(`holdTodayAgendaDismissal`, `src/repo/today-agenda.ts`, called by `POST /api/today-agenda/dismiss`):
+the goal check-in starts its own 14-day cooldown (`dismissGoalCheckin`); the sensor recheck and the
+weigh-in / tape requests release their attention ladder until the episode ends (a new reading, the
+measurement, or the need lapsing); a lab recheck, being health-adjacent, only spends its ladder's own
+cooldown step (never released); since-last is keyed on the card's identity AND what it says, and
+standing-momentum on which wins it names (`dismiss_fact`, never the numbers that move with every
+weigh-in) — so they return only with a new fact. A card with its own ack (the
+health read, cut quality), an announced change (its own Hold), a plan decision or a clinician item is
+never in those lists.
 
 **A dismissal is evidence, but never from one tap.** `src/repo/surface-dismissals.ts` is the ONE
 write/read surface for the trace a dismiss leaves (`surface_dismissals`, m93): a Today-agenda card

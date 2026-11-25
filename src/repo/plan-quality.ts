@@ -111,7 +111,7 @@ export interface WeeklyFloorShortfall {
 // group below its landmark low, for every group the floor context lists, in a week with
 // at least two lifting days (a one-day plan is a fragment, not a week). The plan
 // compiler's `muscle_density_low` warning, the redraw precheck
-// (verify-floors.ts planVolumeFloorViolations) and the coverage ask (plan-coverage.ts)
+// (verify-floors.ts planVolumeFloorViolations) and the coverage change (plan-coverage.ts)
 // all read it here, so they can never disagree about what a gap is.
 function floorShortfallsFrom(
   groupSets: Map<MuscleGroup, number>,

@@ -229,7 +229,7 @@ test("a casing-only canonical lands on a logged row (it was skipped as 'no chang
   assert.equal(db.prepare("SELECT COUNT(*) AS c FROM logged_sets WHERE exercise_id = ?").get(id).c, 1);
 });
 
-test("a station-word respelling lands on a logged row; a rewording is PARKED, never dropped", () => {
+test("a station-word respelling lands on a logged row; an unrelated name changes nothing and asks nothing", () => {
   // "Seated Leg Press - Machine" IS a "Seated Leg Press" — the one relaxation the write
   // chokepoint already forgives, so the agent may land it on a logged row.
   const press = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Seated Leg Press - Machine', 'quads', 'reps')").run().lastInsertRowid);
@@ -239,22 +239,36 @@ test("a station-word respelling lands on a logged row; a rewording is PARKED, ne
   assert.equal(repo.getExercise(press).name, "Seated Leg Press");
   assert.equal(repo.resolveExerciseName("Seated Leg Press - Machine").exercise_id, press, "the old spelling keeps resolving");
 
-  // "Abs Crunch Rope Pull Overhead" → "Cable Crunch" changes the words, so the guard
-  // cannot vouch for it. Before, that proposal vanished; now it waits on the row.
+  // "Abs Crunch Rope Pull Overhead" → "Cable Crunch": no shared key, neither name's words
+  // inside the other's. Two differently named lifts with no structural tie are two lifts:
+  // the athlete's name stays, and nothing is parked for them to answer (no alias either).
   const crunch = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Abs Crunch Rope Pull Overhead', 'core', 'reps')").run().lastInsertRowid);
   repo.logSetByName({ exercise: "Abs Crunch Rope Pull Overhead", weight: 60, reps: 12, date: "2026-07-01" });
-  const parked = repo.applyExerciseEnrichment(crunch, { canonical: "Cable Crunch" });
-  assert.equal(parked.name, "Abs Crunch Rope Pull Overhead", "the name the athlete uses stays");
-  assert.equal(repo.getExercise(crunch).suggested_name, "Cable Crunch", "the proposal is parked for a yes/no");
-  assert.equal(repo.findExercise("Cable Crunch"), undefined, "no row is minted for the proposal");
+  const kept = repo.applyExerciseEnrichment(crunch, { canonical: "Cable Crunch" });
+  assert.equal(kept.name, "Abs Crunch Rope Pull Overhead", "the name the athlete uses stays");
+  assert.equal(repo.getExercise(crunch).suggested_name ?? null, null, "nothing is parked for a yes/no");
+  assert.equal(repo.findExercise("Cable Crunch"), undefined, "no row and no alias is minted for the proposal");
+
+  // A rewording of the SAME lift (one name's words inside the other's) that changes the
+  // words the athlete typed is still parked — on the lift's own sheet — for their yes/no.
+  const squat = Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES ('Squat', 'quads', 'reps')").run().lastInsertRowid);
+  repo.logSetByName({ exercise: "Squat", weight: 225, reps: 5, date: "2026-07-01" });
+  repo.applyExerciseEnrichment(squat, { canonical: "Back Squat" });
+  assert.equal(repo.getExercise(squat).name, "Squat");
+  assert.equal(repo.getExercise(squat).suggested_name, "Back Squat", "a same-lift rewording is parked");
+  assert.equal(repo.getExerciseDetail("Squat").suggested_name, "Back Squat", "and shown on the lift's sheet");
 
   // "Keep" declines AND remembers: the same proposal is refused next pass, silently.
-  repo.updateExercise(crunch, { keep_name: true });
-  assert.equal(repo.getExercise(crunch).suggested_name ?? null, null);
-  assert.equal(repo.getExercise(crunch).refused_name, "Cable Crunch");
-  const again = repo.renameExercise(crunch, "cable crunch", { source: "agent" });
+  repo.updateExercise(squat, { keep_name: true });
+  assert.equal(repo.getExercise(squat).suggested_name ?? null, null);
+  assert.equal(repo.getExercise(squat).refused_name, "Back Squat");
+  const again = repo.renameExercise(squat, "back squat", { source: "agent" });
   assert.equal(again.outcome, "refused");
-  assert.equal(repo.getExercise(crunch).suggested_name ?? null, null, "a declined proposal is never re-parked");
+  assert.equal(repo.getExercise(squat).suggested_name ?? null, null, "a declined proposal is never re-parked");
+
+  // A suggestion parked under the older rule with no structural tie is never surfaced.
+  db.prepare("UPDATE exercises SET suggested_name = 'Cable Crunch' WHERE id = ?").run(crunch);
+  assert.equal(repo.getExerciseDetail("Abs Crunch Rope Pull Overhead").suggested_name, null);
 
   // A PERSON's word lands where an agent's would not.
   const person = repo.updateExercise(crunch, { name: "Cable Crunch" });
@@ -330,13 +344,13 @@ test("applyExerciseEnrichment folds a fresh duplicate into an existing canonical
   assert.equal(repo.findExerciseExact("Move Alpha Cable"), undefined, "the duplicate row is gone");
 });
 
-test("a fresh row with no structural relation is parked, never folded on the agent's word", () => {
+test("a fresh row with no structural relation stays its own lift, and nothing is asked", () => {
   repo.findOrCreateExercise("Leg Curl");
   const nordic = rawExercise("Nordic Curl");
   const r = repo.applyExerciseEnrichment(nordic, { canonical: "Leg Curl" });
   assert.equal(r.id, nordic, "the row stands");
   assert.ok(repo.findExerciseExact("Nordic Curl"), "Nordic Curl is still its own lift");
-  assert.equal(repo.findExerciseExact("Nordic Curl").suggested_name, "Leg Curl", "waiting for a person's yes");
+  assert.equal(repo.findExerciseExact("Nordic Curl").suggested_name ?? null, null, "no question is parked");
   assert.equal(repo.findExercise("Nordic Curl")?.id, nordic, "no alias sends its future logs into Leg Curl");
 });
 

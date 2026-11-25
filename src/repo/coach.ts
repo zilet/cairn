@@ -981,7 +981,7 @@ function buildTrainingSlice(
     })(),
     // The plan's standing COVERAGE gaps (plan-coverage.ts): a floored group the week as
     // written leaves under its floor, or a movement family it leaves out — the same read
-    // the server's coverage ask makes, so a redraw or an evolution can close the hole
+    // the server's coverage change makes, so a redraw or an evolution can close the hole
     // instead of shipping a new program with it. Plain words; `held` says why a gap is set
     // aside this week (the same holds the floor and the ask honour), declined:true marks
     // one the athlete chose to keep. Built from the plan and floor context read above.

@@ -5,7 +5,7 @@ import {
   dayDetail,
   dayDetailDate,
   deleteExercise,
-  deletePlanDay,
+  deletePlanDayByPerson,
   detachGuide,
   exerciseGuideStatus,
   getExerciseDetail,
@@ -37,6 +37,7 @@ import {
 } from "../../domain/brain/structure-request.js";
 import { liftAlternatives, liftVariations } from "../../repo/exercise-suggestions.js";
 import { getPlanWithPurpose } from "../../repo.js";
+import { previewPlanCoverageChange } from "../../domain/brain/coverage-change.js";
 import { PlanQualityError } from "../../repo/plan-quality.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
@@ -129,6 +130,13 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "Validate the current training week for structural errors and evidence-based quality warnings.",
     {},
     async () => asText(getPlanQuality())
+  );
+
+  server.tool(
+    "get_plan_coverage_preview",
+    "What the daily plan-coverage pass WOULD change next, read-only (nothing is drafted or written): { status, gaps, changes, summary, explanation, partial, hold }. status would_change carries the exact changes; held / settling / declined / standing / none / unavailable say why nothing would. Mirrors GET /api/plan/coverage-preview.",
+    {},
+    async () => asText(previewPlanCoverageChange())
   );
 
   server.tool(
@@ -248,7 +256,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "delete_plan_day",
     "Remove a training day from the plan (logged history is kept).",
     { day_number: z.number().int() },
-    async ({ day_number }) => asText(deletePlanDay(day_number))
+    async ({ day_number }) => asText(deletePlanDayByPerson(day_number))
   );
 
   server.tool(

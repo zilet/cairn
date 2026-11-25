@@ -11,15 +11,21 @@
 //      athlete just replaced. A session with logged work, or one the athlete composed
 //      themselves (athlete_override / agent_suggest), is never touched.
 //
-// And after the write it reads the saved week for a coverage gap (coverage-ask.ts): a
-// floored group left under its floor, or a movement family left out, is said ONCE as a
-// calm ask with the smallest change that covers it. The save itself is untouched by
-// that read — it has already committed, and a failed read only skips the ask.
+// And every person write here — a save, a deleted day, an in-session swap — runs inside
+// withPersonAuthoredCoverage (plan-coverage.ts), WITHOUT ever editing the plan back: a
+// coverage gap the write itself made or deepened (they took chest sets out) is the
+// person's own choice — recorded as such, left alone, and marked declined for the
+// plan-shaping prompts — and an open coverage draft the write closed is withdrawn
+// (coverage-change.ts). Any other gap is the daily pass's to close. A failed coverage
+// read only skips it; the write is untouched.
 import { recordAsyncFailure } from "../../diagnostics.js";
-import { type CoverageAskOutcome, raisePlanCoverageAsk } from "../brain/coverage-ask.js";
+import { type CoverageChangeOutcome, settlePlanCoverageAfterSave } from "../brain/coverage-change.js";
+import { withPersonAuthoredCoverage } from "../../repo/plan-coverage.js";
+import { applySwapSmart } from "../../repo/plan-swap.js";
 import { activeCompositionPlanDayNumber, refreshPreparedDayForPlanChange } from "../../repo/adaptive-session.js";
 import {
   type PlanPrescription,
+  deletePlanDay,
   getPlan,
   getPlanDay,
   planPrescriptionSnapshot,
@@ -96,20 +102,23 @@ function changedItemDays(before: Map<number, string>, after: Map<number, string>
   return [...days].sort((a, b) => a - b);
 }
 
-// Re-take today's session only for a day whose items the save actually changed: a
-// re-take clears the session's skips and re-runs the adaptive decision, so a rename or
-// an untouched day must never trigger one. When the save REMOVED the day today's
-// snapshot came from, the unstarted snapshot is retired instead.
-// The coverage ask rides AFTER the save commits and can never undo or fail it.
-function coverageAfterSave(date: string): CoverageAskOutcome | null {
+
+// The coverage settle rides AFTER the write commits (the write itself ran inside
+// withPersonAuthoredCoverage, which recorded any gap it made as the person's own) and
+// can never undo or fail it.
+function coverageAfterSave(date: string, keptByPerson: string[]): CoverageChangeOutcome | null {
   try {
-    return raisePlanCoverageAsk({ date });
+    return settlePlanCoverageAfterSave({ date, kept_by_person: keptByPerson });
   } catch (err) {
-    recordAsyncFailure("plan_save", "coverage_ask", err);
+    recordAsyncFailure("plan_save", "coverage_settle", err);
     return null;
   }
 }
 
+// Re-take today's session only for a day whose items the save actually changed: a
+// re-take clears the session's skips and re-runs the adaptive decision, so a rename or
+// an untouched day must never trigger one. When the save REMOVED the day today's
+// snapshot came from, the unstarted snapshot is retired instead.
 function refreshToday(changedDays: number[], todayDayBefore: number | null, date: string): void {
   if (!changedDays.length) return;
   try {
@@ -131,19 +140,23 @@ export function savePlanDayByPerson(
 ) {
   const { date = localDateISO(), ...checkedOpts } = opts;
   const todayDayBefore = activeCompositionPlanDayNumber(date);
-  const { result, changed } = withSqliteSavepoint("person_plan_day_save", () => {
-    const before = planPrescriptionSnapshot();
-    const itemsBefore = dayItemSignatures();
-    // `by: "person"`: the athlete's own set count is a new prescription for them
-    // (prescription-authorship.ts), so the catch-up never walks their cut back.
-    const saved = savePlanDayChecked(day_number, name, focus, items, { ...checkedOpts, by: "person" });
-    releasePlanAnnotationsForPersonSave(changedPrescriptionKeys(before, planPrescriptionSnapshot()));
-    return { result: saved, changed: changedItemDays(itemsBefore, dayItemSignatures()) };
-  });
-  refreshToday(changed, todayDayBefore, date);
-  const coverage_ask = coverageAfterSave(date);
+  const { result: written, kept_by_person } = withPersonAuthoredCoverage(
+    () =>
+      withSqliteSavepoint("person_plan_day_save", () => {
+        const before = planPrescriptionSnapshot();
+        const itemsBefore = dayItemSignatures();
+        // `by: "person"`: the athlete's own set count is a new prescription for them
+        // (prescription-authorship.ts), so the catch-up never walks their cut back.
+        const saved = savePlanDayChecked(day_number, name, focus, items, { ...checkedOpts, by: "person" });
+        releasePlanAnnotationsForPersonSave(changedPrescriptionKeys(before, planPrescriptionSnapshot()));
+        return { result: saved, changed: changedItemDays(itemsBefore, dayItemSignatures()) };
+      }),
+    date
+  );
+  refreshToday(written.changed, todayDayBefore, date);
+  const coverage = coverageAfterSave(date, kept_by_person);
   // Re-read: the day handed back must not carry the annotations just released.
-  return { ...result, day: getPlanDay(day_number), coverage_ask };
+  return { ...written.result, day: getPlanDay(day_number), coverage };
 }
 
 export function replacePlanByPerson(
@@ -152,18 +165,38 @@ export function replacePlanByPerson(
 ) {
   const { date = localDateISO(), ...checkedOpts } = opts;
   const todayDayBefore = activeCompositionPlanDayNumber(date);
-  const { result, changed } = withSqliteSavepoint("person_plan_replace", () => {
-    const before = planPrescriptionSnapshot();
-    const itemsBefore = dayItemSignatures();
-    const saved = replacePlanChecked(days, { ...checkedOpts, by: "person" });
-    // The editor saves the whole week at once, so only what moved is the athlete's —
-    // an untouched lift keeps its note and its Undo.
-    releasePlanAnnotationsForPersonSave(changedPrescriptionKeys(before, planPrescriptionSnapshot()), {
-      retireUndoWhenFullyReleased: true,
-    });
-    return { result: saved, changed: changedItemDays(itemsBefore, dayItemSignatures()) };
-  });
-  refreshToday(changed, todayDayBefore, date);
-  const coverage_ask = coverageAfterSave(date);
-  return { ...result, plan: getPlan(), coverage_ask };
+  const { result: written, kept_by_person } = withPersonAuthoredCoverage(
+    () =>
+      withSqliteSavepoint("person_plan_replace", () => {
+        const before = planPrescriptionSnapshot();
+        const itemsBefore = dayItemSignatures();
+        const saved = replacePlanChecked(days, { ...checkedOpts, by: "person" });
+        // The editor saves the whole week at once, so only what moved is the athlete's —
+        // an untouched lift keeps its note and its Undo.
+        releasePlanAnnotationsForPersonSave(changedPrescriptionKeys(before, planPrescriptionSnapshot()), {
+          retireUndoWhenFullyReleased: true,
+        });
+        return { result: saved, changed: changedItemDays(itemsBefore, dayItemSignatures()) };
+      }),
+    date
+  );
+  refreshToday(written.changed, todayDayBefore, date);
+  const coverage = coverageAfterSave(date, kept_by_person);
+  return { ...written.result, plan: getPlan(), coverage };
+}
+
+// A person deleting a whole plan day (DELETE /plan/:day, MCP delete_plan_day): a gap it
+// leaves is theirs, exactly as a save's is.
+export function deletePlanDayByPerson(day_number: number, opts: { date?: string } = {}) {
+  const date = opts.date ?? localDateISO();
+  const { result, kept_by_person } = withPersonAuthoredCoverage(() => deletePlanDay(day_number), date);
+  return { ...result, coverage: coverageAfterSave(date, kept_by_person) };
+}
+
+// A person's in-session swap (POST /program/swap/apply, MCP swap_exercise_now): their
+// direct edit of a named slot, so a gap it leaves is theirs too.
+export function applySwapByPerson(from: string, to: string, day: number | null, opts: { date?: string } = {}) {
+  const date = opts.date ?? localDateISO();
+  const { result, kept_by_person } = withPersonAuthoredCoverage(() => applySwapSmart(from, to, day), date);
+  return result.ok ? { ...result, coverage: coverageAfterSave(date, kept_by_person) } : result;
 }

@@ -37,6 +37,7 @@ import {
   deleteAttentionSchedule,
   getAttentionSchedule,
   listDueAttention,
+  upsertAttentionSchedule,
 } from "./attention.js";
 import { cutReaffirmation } from "./cut-target.js";
 import { canonicalBodyweightSeries } from "./bodyweight.js";
@@ -535,6 +536,43 @@ export function reconcileMeasurementRequestAttention(asOf: string, surfacedId: s
       reason: request.reason,
     },
   });
+}
+
+/**
+ * The athlete waved a request off (Today's ×, card id `measurement-request-<need>`). It
+ * has said its piece for this episode: the need's ladder goes straight to `released`,
+ * and it stays quiet until the measurement arrives or the need lapses (the reconcile
+ * above then deletes the row, so a later, new need starts fresh). True when the card's
+ * need was live and is now released.
+ */
+export function dismissMeasurementRequest(cardId: string, asOf: string = localDateISO()): boolean {
+  const live = liveMeasurementNeeds(measurementRequestState(asOf));
+  const request = [...live.values()].find((r) => `measurement-request-${r.need.replace(/_/g, "-")}` === cardId) ?? null;
+  if (!request) return false;
+  const key = signalKeyFor(request.need);
+  // A lab recheck is health-adjacent: a × holds it for its own ladder's cooldown (the
+  // step a seen ask spends), never releases it for the episode.
+  if (request.need === "lab_recheck") {
+    const current = getAttentionSchedule(key);
+    if (current && (current.tier === "released" || !current.next_due || current.next_due > asOf)) return true;
+    applyAttentionObservation({
+      signal_key: key,
+      policy: policyFor(request.need, request.reason),
+      observation: { checked_at: asOf, status: current ? "clean" : "active", source: MEASUREMENT_REQUEST_SOURCE, reason: request.reason },
+    });
+    return true;
+  }
+  if (!getAttentionSchedule(key)) {
+    applyAttentionObservation({
+      signal_key: key,
+      policy: policyFor(request.need, request.reason),
+      observation: { checked_at: asOf, status: "active", source: MEASUREMENT_REQUEST_SOURCE, reason: request.reason },
+    });
+  }
+  const entry = getAttentionSchedule(key);
+  if (!entry) return false;
+  upsertAttentionSchedule({ ...entry, tier: "released", next_due: null, last_checked: asOf });
+  return true;
 }
 
 // Kept beside the ladder so a caller reasoning about a need can name its row

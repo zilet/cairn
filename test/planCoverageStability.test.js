@@ -1,7 +1,7 @@
-// The coverage ask does not flicker with the week. The gap is judged on the plan AS
-// WRITTEN; what varies week to week is a HOLD — nothing new is raised under it, and an
-// ask already open is never withdrawn for it (plan-coverage.ts readPlanCoverage,
-// coverage-ask.ts). Covered here:
+// The coverage change does not flicker with the week. The gap is judged on the plan AS
+// WRITTEN; what varies week to week is a HOLD — nothing new is changed under it, and a
+// draft already open is never withdrawn for it (plan-coverage.ts readPlanCoverage,
+// coverage-change.ts). Covered here:
 //   - a recovery week, a deload block, an affirmed cut and a trip each hold: no ask is
 //     raised while they last, an open one stays exactly as it was, and when the window
 //     passes the same ask is still the one standing (or is raised then, if none was);
@@ -11,16 +11,19 @@
 //   - a "no" is never pushed out of the lookup by however many withdrawn asks pile up;
 //   - the standing gap reaches the plan-shaping prompts as DATA.coverage_gaps, with a
 //     declined gap marked, and the precheck and the compiler read the same definition.
+// The hold mechanics are read under review_everything, the lead mode in which a coverage
+// change is held as an open draft (under lead the same change lands at once and closes the
+// gap — test/planCoverageChange.test.js); the open-draft rules are the same either way.
 // Synthetic fixtures only. Deterministic and offline.
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 import { savePlanDayByPerson } from "../dist/domain/training/plan-save-use-case.js";
-import { raisePlanCoverageAsk } from "../dist/domain/brain/coverage-ask.js";
+import { closePlanCoverageGap } from "../dist/domain/brain/coverage-change.js";
 import {
-  COVERAGE_ASK_AGENT,
-  COVERAGE_ASK_INSTRUCTION,
-  coverageAskRows,
+  COVERAGE_AGENT,
+  COVERAGE_INSTRUCTION,
+  coverageChangeRows,
   coverageGapFacts,
   readPlanCoverage,
 } from "../dist/repo/plan-coverage.js";
@@ -32,6 +35,17 @@ import { cutReaffirmation } from "../dist/repo/cut-target.js";
 import * as blocks from "../dist/repo/program-blocks.js";
 import { promptData } from "../dist/prompt/context-projection.js";
 import { getCoachContext } from "../dist/repo/coach.js";
+
+// Both chest lifts carry an established four-set habit (two sessions in recent weeks), so
+// the bounded remedy has room to step them (VOLUME_BOUNDS: no habit, no raise).
+beforeEach(() => {
+  repo.setSettings({ lead_mode: "review_everything" });
+  for (const exercise of ["Barbell Bench Press", "Incline Dumbbell Press"]) {
+    for (const daysAgo of [10, 17]) {
+      for (let i = 0; i < 4; i++) repo.logSetByName({ exercise, weight: 100, reps: 8, date: addDaysISO(localDateISO(), -daysAgo) });
+    }
+  }
+});
 
 const STRENGTH = { training_intent: { priorities: ["strength", "longevity"], endurance_role: "none" } };
 
@@ -73,14 +87,14 @@ const shortChestUpper = () => fedWeek()[0].items.map((item) => (item.muscle_grou
 const shortWeek = () => fedWeek().map((day, i) => (i === 0 ? { ...day, items: shortChestUpper() } : day));
 
 const coverageRows = () =>
-  db.prepare(`SELECT id, status FROM plan_proposals WHERE agent = ? ORDER BY id`).all(COVERAGE_ASK_AGENT);
+  db.prepare(`SELECT id, status FROM plan_proposals WHERE agent = ? ORDER BY id`).all(COVERAGE_AGENT);
 const openRows = () => coverageRows().filter((row) => row.status === "draft");
 
 function raisedShortChest() {
   repo.setProfile(STRENGTH);
   repo.replacePlan(shortWeek());
-  const raised = raisePlanCoverageAsk();
-  assert.equal(raised.status, "raised");
+  const raised = closePlanCoverageGap({ act: true });
+  assert.equal(raised.status, "asked");
   return raised.proposal_id;
 }
 
@@ -88,7 +102,7 @@ function raisedShortChest() {
 function holdsSteady(label, open, close) {
   const id = raisedShortChest();
   open();
-  const during = raisePlanCoverageAsk();
+  const during = closePlanCoverageGap({ act: true });
   assert.equal(during.status, "held", `${label}: the week is held`);
   assert.equal(during.proposal_id, id, `${label}: the open ask stands`);
   assert.deepEqual(during.withdrawn, [], `${label}: nothing withdrawn for a varying week`);
@@ -98,7 +112,7 @@ function holdsSteady(label, open, close) {
     `${label}: still exactly the one ask`
   );
   close();
-  const after = raisePlanCoverageAsk();
+  const after = closePlanCoverageGap({ act: true });
   assert.equal(after.status, "standing", `${label}: after the window, the same ask stands`);
   assert.equal(after.proposal_id, id);
   assert.equal(coverageRows().length, 1, `${label}: no second draft was ever written`);
@@ -160,19 +174,19 @@ test("nothing is raised during a held week; the ask comes when it passes", () =>
   repo.setProfile(STRENGTH);
   repo.replacePlan(shortWeek());
   scheduleRecoveryCycle({ effective_on: addDaysISO(localDateISO(), 1), reason: "a planned light week" });
-  const held = raisePlanCoverageAsk();
+  const held = closePlanCoverageGap({ act: true });
   assert.equal(held.status, "held");
   assert.equal(held.hold, "recovery_week");
   assert.equal(coverageRows().length, 0, "no draft written under the hold");
   db.prepare(`DELETE FROM recovery_cycles`).run();
-  assert.equal(raisePlanCoverageAsk().status, "raised");
+  assert.equal(closePlanCoverageGap({ act: true }).status, "asked");
 });
 
 test("an ask the plan itself closed is withdrawn even during a held week", () => {
   const id = raisedShortChest();
   scheduleRecoveryCycle({ effective_on: addDaysISO(localDateISO(), 1), reason: "a planned light week" });
   const fixed = savePlanDayByPerson(1, "Upper", null, fedWeek()[0].items);
-  assert.deepEqual(fixed.coverage_ask.withdrawn, [id]);
+  assert.deepEqual(fixed.coverage.withdrawn, [id]);
   assert.equal(repo.getProposal(id).status, "superseded");
   assert.equal(openRows().length, 0);
 });
@@ -182,7 +196,7 @@ test("an injury opened under an open ask withdraws an offer that would load it",
   const before = repo.getProposal(id).parsed.changes;
   assert.ok(before.some((c) => /press/i.test(c.exercise)), "precondition: the offer presses");
   repo.addContextEvent({ kind: "injury", title: "Shoulder strain", start_date: localDateISO() });
-  const out = raisePlanCoverageAsk();
+  const out = closePlanCoverageGap({ act: true });
   assert.ok(out.withdrawn.includes(id), "the pressing offer is withdrawn");
   const open = openRows();
   for (const row of open) {
@@ -203,7 +217,7 @@ test("a week with no pressing at all is not asked to add pressing while a should
   repo.addContextEvent({ kind: "injury", title: "Shoulder strain", start_date: localDateISO() });
   const read = readPlanCoverage();
   assert.ok(read.standing.some((el) => el.key === "pattern:horizontal-push"), "precondition: the family is missing");
-  raisePlanCoverageAsk();
+  closePlanCoverageGap({ act: true });
   for (const row of openRows()) {
     const changes = repo.getProposal(row.id).parsed.changes;
     assert.ok(
@@ -224,11 +238,11 @@ test("a no is never pushed out of the lookup by withdrawn asks piling up", () =>
     `INSERT INTO plan_proposals (agent, instruction, raw_output, parsed_json, status) VALUES (?, ?, '', ?, 'superseded')`
   );
   const parsed = JSON.stringify({ changes: [], coverage_gap: { version: 2, elements: [{ key: "group:back", fingerprint: "x" }] } });
-  for (let i = 0; i < 260; i++) insert.run(COVERAGE_ASK_AGENT, COVERAGE_ASK_INSTRUCTION, parsed);
-  const rows = coverageAskRows();
+  for (let i = 0; i < 260; i++) insert.run(COVERAGE_AGENT, COVERAGE_INSTRUCTION, parsed);
+  const rows = coverageChangeRows();
   assert.ok(rows.some((row) => row.id === id && row.status === "discarded"), "the answer is read");
   assert.ok(rows.every((row) => row.status !== "superseded"), "withdrawn rows are not read at all");
-  assert.equal(raisePlanCoverageAsk().status, "answered");
+  assert.equal(closePlanCoverageGap({ act: true }).status, "declined");
 });
 
 test("the standing gap is the plan as written: a light week hides nothing from it", () => {
@@ -253,7 +267,7 @@ test("the plan-shaping prompts carry the standing gaps: open ones to close, a de
   const coach = JSON.parse(promptData(getCoachContext(), "coach"));
   assert.ok(Array.isArray(coach.coverage_gaps), "the coach site carries it too");
 
-  const raised = raisePlanCoverageAsk();
+  const raised = closePlanCoverageGap({ act: true });
   repo.setProposalStatus(raised.proposal_id, "discarded");
   assert.equal(coverageGapFacts()[0].declined, true, "a gap the athlete kept is said so");
 });
@@ -261,14 +275,14 @@ test("the plan-shaping prompts carry the standing gaps: open ones to close, a de
 test("the bounded declined read pages past newer answers about other gaps", () => {
   repo.setProfile(STRENGTH);
   repo.replacePlan(shortWeek());
-  const raised = raisePlanCoverageAsk();
+  const raised = closePlanCoverageGap({ act: true });
   repo.setProposalStatus(raised.proposal_id, "discarded");
   const insert = db.prepare(
     `INSERT INTO plan_proposals (agent, instruction, raw_output, parsed_json, status) VALUES (?, ?, '', ?, 'applied')`
   );
   for (let i = 0; i < 45; i++) {
     const parsed = JSON.stringify({ changes: [], coverage_gap: { version: 2, elements: [{ key: "group:back", fingerprint: `other-${i}` }] } });
-    insert.run(COVERAGE_ASK_AGENT, COVERAGE_ASK_INSTRUCTION, parsed);
+    insert.run(COVERAGE_AGENT, COVERAGE_INSTRUCTION, parsed);
   }
   assert.equal(coverageGapFacts()[0].declined, true, "the older no is still found");
 });
@@ -332,14 +346,14 @@ test("a read that failed raises nothing and withdraws nothing", () => {
   db.exec("ALTER TABLE plan_days RENAME TO plan_days_unreadable");
   let out;
   try {
-    out = raisePlanCoverageAsk();
+    out = closePlanCoverageGap({ act: true });
   } finally {
     db.exec("ALTER TABLE plan_days_unreadable RENAME TO plan_days");
   }
   assert.equal(out.status, "unavailable");
   assert.deepEqual(out.withdrawn, []);
   assert.deepEqual(openRows().map((row) => row.id), [id], "the open ask stands");
-  assert.equal(raisePlanCoverageAsk().status, "standing", "and is still the one once the read works again");
+  assert.equal(closePlanCoverageGap({ act: true }).status, "standing", "and is still the one once the read works again");
 });
 
 test("the compiler, the precheck and the coverage read share one floor definition", () => {

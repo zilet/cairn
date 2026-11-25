@@ -50,6 +50,9 @@ import {
 } from "./recovery-week-ledger.js";
 import { activateRecoveryCycle, scheduleRecoveryCycle } from "./recovery-cycles.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
+// Call-time only (a cycle through progression.ts is harmless): a person's own direct
+// edit records any coverage gap it makes as theirs.
+import { withPersonAuthoredCoverage } from "./plan-coverage.js";
 import {
   normalizeStoredProposalPayload,
   prepareProposalPayload,
@@ -1591,7 +1594,31 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
 }
 
 export function applyProposal(id: number, opts: ProposalApplyOptions = {}) {
-  return withSqliteSavepoint(`apply_proposal_${Math.trunc(Number(id))}`, () => applyProposalUnit(id, opts));
+  return withSqliteSavepoint(`apply_proposal_${Math.trunc(Number(id))}`, () =>
+    personDirectEdit(id, opts)
+      ? withPersonAuthoredCoverage(() => applyProposalUnit(id, opts)).result
+      : applyProposalUnit(id, opts)
+  );
+}
+
+// A person's own DIRECT edit to named slots, applied through a proposal: the athlete's
+// own request (`byPersonRequest` — their words in chat, a what-if they acted on) carrying
+// a `changes[]` payload. A gap it makes is theirs (plan-coverage.ts
+// withPersonAuthoredCoverage). A restructure (`days`) they asked for is the agent's
+// authorship of the week, and a nutrition target is not a plan edit: neither counts.
+function personDirectEdit(id: number, opts: ProposalApplyOptions): boolean {
+  if (!opts.byPersonRequest) return false;
+  // A draft the orphan sweep adopts (an older or background chat turn's leftover) was not
+  // directly asked for in THIS turn or edit, whatever its provenance: never the person's.
+  if (opts.orphanSiblingCleanup || opts.normalizedApplyPayload) return false;
+  const parsed = (getProposal(id) as any)?.parsed;
+  return (
+    !!parsed &&
+    parsed.kind !== "nutrition_target" &&
+    !Array.isArray(parsed.days) &&
+    Array.isArray(parsed.changes) &&
+    parsed.changes.length > 0
+  );
 }
 
 
