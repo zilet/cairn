@@ -1732,7 +1732,7 @@ export function listStrengthGarminActivities(opts: { date?: string; days?: numbe
     );
   }
   const days = Math.max(1, Math.min(365, opts.days ?? 30));
-  const since = new Date(Date.now() - (days - 1) * 864e5).toISOString().slice(0, 10);
+  const since = addDaysISO(localDateISO(), -(days - 1)) ?? localDateISO();
   return (
     db.prepare(`SELECT * FROM garmin_activities WHERE date >= ? ORDER BY date DESC, id DESC`).all(since) as any[]
   ).filter((r) => isStrengthGarminType(r.type));
@@ -1745,7 +1745,7 @@ export function listStrengthGarminActivities(opts: { date?: string; days?: numbe
 // Garmin isn't configured (no rows).
 export function listUnreconciledGarminStrength(days = 30): any[] {
   const d = Math.max(1, Math.min(365, days));
-  const since = new Date(Date.now() - (d - 1) * 864e5).toISOString().slice(0, 10);
+  const since = addDaysISO(localDateISO(), -(d - 1)) ?? localDateISO();
   return (
     db
       .prepare(`SELECT * FROM garmin_activities WHERE date >= ? AND session_id IS NULL ORDER BY date DESC, id DESC`)

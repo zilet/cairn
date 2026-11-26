@@ -22,6 +22,7 @@ import { labRangeRead } from "./lab-range.js";
 import { spokenMarkerName } from "./loop-speech.js";
 import { optimalTrustworthy } from "./optimal-trust.js";
 import { getProfile } from "./profile.js";
+import { stampLocalDay } from "./shared.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 
 export type { DoctorLoopItem } from "./doctor-loop-items.js";
@@ -732,7 +733,7 @@ function applyReviewFollowups(markers: MarkerLike[]): AttentionScheduleEntry[] {
   const review = getLatestHealthReview() as any;
   const parsed = review?.parsed;
   const followups = Array.isArray(parsed?.followups) ? parsed.followups : [];
-  const created = String(review?.created_at ?? "").slice(0, 10);
+  const created = stampLocalDay(review?.created_at);
   const checkedAt = /^\d{4}-\d{2}-\d{2}$/.test(created) ? created : todayISO();
   const answered = newestReadingBySlug(markers);
   const kept = new Set<string>();

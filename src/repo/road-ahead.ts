@@ -11,7 +11,7 @@ import { getActiveBlock } from "./program-blocks.js";
 import type { ProgramState } from "./program-state.js";
 import { getStrengthJourneys, type StrengthJourney } from "./strength-objectives.js";
 import { getTrainingIntent } from "./training-intent.js";
-import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO, stampLocalDay } from "./shared.js";
 import { round1 } from "../lib/numbers.js";
 
 export type PriorityTrack = "muscle" | "race" | "cut";
@@ -107,7 +107,7 @@ const STRETCH_FACTOR = 1.5;
 /** The last day of the active block, or six weeks out when there is none. */
 export function blockHorizon(today = localDateISO()): { end: string; from_block: boolean } {
   const block = getActiveBlock();
-  const started = String(block?.started_at ?? "").slice(0, 10);
+  const started = stampLocalDay(block?.started_at);
   const weeks = Number(block?.total_weeks);
   const end = /^\d{4}-\d{2}-\d{2}$/.test(started) && weeks > 0 ? addDaysISO(started, weeks * 7) : null;
   if (end && end > today) return { end, from_block: true };

@@ -313,6 +313,32 @@ export function localDayOfStamp(stamp: unknown, tz: string | undefined = activeT
   return d ? localDateISO(d, tz) : null;
 }
 
+// The local day of a stored value that may be EITHER a bare date (kept as written)
+// or a timestamp (re-keyed to the athlete's day). The drop-in for the old
+// `String(x).slice(0, 10)`, which answered in UTC for a stamp. "" when neither.
+export function stampLocalDay(value: unknown, tz: string | undefined = activeTimeZone()): string {
+  const s = String(value ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return localDayOfStamp(s, tz) ?? "";
+}
+
+// The UTC stamp ("YYYY-MM-DD HH:MM:SS", the shape datetime() yields) of the instant a
+// LOCAL day begins. A SQL bound on a stored stamp compares `datetime(col) >= ?` against
+// this; `date(col) >= ?` would compare the UTC day to a local one. An unparseable day
+// is returned as written, so the bound stays a plain string compare.
+export function localDayStartStamp(day: string, tz: string | undefined = activeTimeZone()): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day ?? ""));
+  if (!m) return String(day ?? "");
+  const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  let t = wall;
+  // Two passes settle a DST edge: the offset is read at the guess, then at the answer.
+  for (let i = 0; i < 2; i++) {
+    const p = zonedParts(new Date(t), tz);
+    t += wall - Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+  }
+  return new Date(t).toISOString().slice(0, 19).replace("T", " ");
+}
+
 // A short, human time label for a chat message relative to `now`, so the agent
 // can tell this morning's turn from a 5 PM one (the history it's handed is
 // otherwise timestamp-less). Today → just the clock time; yesterday/earlier this

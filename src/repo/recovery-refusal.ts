@@ -18,7 +18,7 @@ import { db } from "../db.js";
 import { latestUserVetoAt } from "./brain-decisions.js";
 import { contextEventReadsAsIllness } from "./context-effect.js";
 import { getActiveBlock } from "./program-blocks.js";
-import { addDaysISO, localDateISO } from "./shared.js";
+import { addDaysISO, localDateISO, stampLocalDay, localDayStartStamp } from "./shared.js";
 import { runDownCheckinCorroboratedOn } from "./felt-brake.js";
 import { withSymptomClosures } from "./injury-symptom-link.js";
 
@@ -42,20 +42,23 @@ function one(sql: string, ...params: unknown[]): boolean {
 // Fail-soft: a read problem is "nothing on record".
 function latestUndoOrSetAsideOn(): string | null {
   try {
-    const row = db
+    const rows = db
       .prepare(
-        `SELECT MAX(on_date) AS on_date FROM (
-           SELECT COALESCE(date(reverted_at), date(created_at)) AS on_date FROM brain_decisions
-            WHERE kind = 'training_structure' AND domain = 'recovery' AND status = 'reverted'
-           UNION ALL
-           SELECT date(created_at) AS on_date FROM brain_decisions
-            WHERE kind = 'training_structure' AND domain = 'recovery' AND status = 'rejected'
-              AND json_extract(action_json, '$.proposal_status') = 'discarded'
-         )`
+        `SELECT COALESCE(reverted_at, created_at) AS at FROM brain_decisions
+          WHERE kind = 'training_structure' AND domain = 'recovery' AND status = 'reverted'
+         UNION ALL
+         SELECT created_at AS at FROM brain_decisions
+          WHERE kind = 'training_structure' AND domain = 'recovery' AND status = 'rejected'
+            AND json_extract(action_json, '$.proposal_status') = 'discarded'`
       )
-      .get() as { on_date?: string | null } | undefined;
-    const on = String(row?.on_date ?? "").slice(0, 10);
-    return isDate(on) ? on : null;
+      .all() as Array<{ at?: string | null }>;
+    // The stamps are UTC instants: the day is the athlete's own, never the UTC one.
+    const on = rows
+      .map((row) => stampLocalDay(row.at))
+      .filter(isDate)
+      .sort()
+      .at(-1);
+    return on ?? null;
   } catch {
     return null;
   }
@@ -77,7 +80,7 @@ export function recoveryWeekRefusedOn(today = localDateISO()): string | null {
       .sort()
       .at(-1);
     if (!refusedOn || !isDate(refusedOn)) return null;
-    const startedAt = String(getActiveBlock()?.started_at ?? "").slice(0, 10);
+    const startedAt = stampLocalDay(getActiveBlock()?.started_at);
     const floor = isDate(startedAt) ? startedAt : (addDaysISO(today, -RECOVERY_REFUSAL_FALLBACK_DAYS) ?? today);
     return refusedOn >= floor ? refusedOn : null;
   } catch {
@@ -125,12 +128,12 @@ export function newSafetyGradeSignalSince(since: string, today = localDateISO())
     one(
       `SELECT 1 FROM health_directives
         WHERE status = 'active'
-          AND date(created_at) > ?
+          AND datetime(created_at) >= ?
           AND resurfaced_from_id IS NULL
           AND domain = 'training'
           AND COALESCE(uncertain, 0) = 0
         LIMIT 1`,
-      since
+      localDayStartStamp(addDaysISO(since, 1) ?? since)
     )
   )
     return true;

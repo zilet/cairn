@@ -120,7 +120,7 @@ import { otherStructuralChangeOnLift, STRUCTURAL_CHANGE_AGENTS } from "../../rep
 import { inRaceRecovery } from "../../repo/race-recovery.js";
 import { recoveryWeekStatus } from "../../repo/recovery-week.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "../../repo/exercise-variations.js";
-import { addDaysISO, daysBetweenISO, localDateISO } from "../../repo/shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO, stampLocalDay } from "../../repo/shared.js";
 import { activeRelevantTrainingSymptoms } from "../../repo/training-symptoms.js";
 import { tripEventOn } from "../../repo/travel-days.js";
 import { currentUnderfuelingRead } from "../../repo/underfueling-snapshot.js";
@@ -555,7 +555,7 @@ function landedSteps(): LandedStep[] | null {
       const lifts: string[] = (Array.isArray(parsed?.changes) ? parsed.changes : [])
         .map((change: any) => String(change?.exercise ?? "").trim())
         .filter(Boolean);
-      const landed = String(row.effective_date ?? row.decided_at ?? row.created_at ?? "").slice(0, 10);
+      const landed = stampLocalDay(row.effective_date ?? row.decided_at ?? row.created_at);
       const own =
         row.agent === VOLUME_STEP_AGENT && parsed?.volume_step?.lift && Number.isFinite(Number(parsed?.volume_step?.to))
           ? { lift: String(parsed.volume_step.lift), to: Number(parsed.volume_step.to) }

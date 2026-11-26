@@ -2,7 +2,7 @@ import { listCheckins } from "./coach.js";
 import { listContextEvents } from "./health.js";
 import { presentLabReading } from "./lab-display.js";
 import { type OptimalZone, markerSide, matchOptimalZone, prioritizeMarkers } from "./propagation.js";
-import { addDaysISO, joinList, localDateISO } from "./shared.js";
+import { addDaysISO, joinList, localDateISO, stampLocalDay } from "./shared.js";
 
 // ============================================================================
 // SYMPTOM → MARKER REASONING — the connective tissue between what the athlete
@@ -203,7 +203,7 @@ function eventSymptomText(ev: any): string {
 function pickEventDate(ev: any): string | null {
   const sd = ev?.start_date && /^\d{4}-\d{2}-\d{2}$/.test(String(ev.start_date)) ? String(ev.start_date).slice(0, 10) : null;
   if (sd) return sd;
-  const ca = ev?.created_at ? String(ev.created_at).slice(0, 10) : null;
+  const ca = ev?.created_at ? stampLocalDay(ev.created_at) : null;
   return ca && /^\d{4}-\d{2}-\d{2}$/.test(ca) ? ca : null;
 }
 

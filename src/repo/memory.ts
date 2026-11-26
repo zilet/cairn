@@ -2,7 +2,7 @@ import { db } from "../db.js";
 import { dayTrainingTruth } from "./brain/read-adherence.js";
 import { POST_INTERVENTION_MIN_SPAN_DAYS, postInterventionWeightTrend } from "./goal-pace.js";
 import { settledPainPlaceReader } from "./injury-symptom-link.js";
-import { addDaysISO, localDateISO } from "./shared.js";
+import { addDaysISO, localDateISO, stampLocalDay } from "./shared.js";
 import { getSessionByDate, sessionSummary } from "./sessions.js";
 import { memoNeutralWrite } from "./request-memo.js";
 import { renderLabQuantities } from "./lab-display.js";
@@ -325,7 +325,7 @@ export function memoryPainHistory(rows: MemoryRow[], on = localDateISO()): Memor
   const settled = settledPainPlaceReader(on);
   return rows.map((row) => {
     if (!PAIN_HISTORY_KINDS.has(String(row.kind ?? ""))) return row;
-    const written = String(row.created_at ?? "").slice(0, 10);
+    const written = stampLocalDay(row.created_at);
     const place = settled(String(row.content ?? ""), written);
     if (!place) return row;
     return {

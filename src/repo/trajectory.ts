@@ -38,7 +38,7 @@ import { getProgramState, type ProgramState } from "./program-state.js";
 import * as intelligence from "./intelligence.js";
 import { journeyMilestones } from "./journey.js";
 import { getHealthSynthesis, presentHealthSynthesis } from "./propagation.js";
-import { localDateISO } from "./shared.js";
+import { localDateISO, stampLocalDay } from "./shared.js";
 import { dateWords } from "./display-words.js";
 
 // ---------------------------------------------------------------------------
@@ -327,8 +327,8 @@ export function getTrajectory(
   if (block) {
     const total = Number.isFinite(block.total_weeks) ? block.total_weeks : null;
     const weekIdx = Number.isFinite(block.week_index) ? block.week_index : null;
-    if (total != null && weekIdx != null && isISODate(block.started_at?.slice?.(0, 10))) {
-      const end = addWeeksISO(block.started_at.slice(0, 10), total);
+    if (total != null && weekIdx != null && isISODate(stampLocalDay(block.started_at))) {
+      const end = addWeeksISO(stampLocalDay(block.started_at), total);
       if (end && end > today) {
         const goalLabel =
           typeof block.goal === "string" && block.goal.trim()

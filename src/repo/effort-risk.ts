@@ -15,7 +15,7 @@
 // Settings always wins. Reads the raw rows (no repo graph): settings.ts resolves every
 // spawn's profile through this, and must stay low in the import order.
 import { db } from "../db.js";
-import { daysBetweenISO, localDateISO } from "./shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO, localDayStartStamp } from "./shared.js";
 
 export type EffortRisk = "open_pain" | "race_window" | "new_finding";
 
@@ -67,10 +67,10 @@ function newHealthFinding(today: string): boolean {
     .prepare(
       `SELECT 1 FROM health_directives
         WHERE status = 'active' AND COALESCE(uncertain, 0) = 0
-          AND date(created_at) >= date(?, '-${RISK_WINDOW_DAYS} days')
+          AND datetime(created_at) >= ?
         LIMIT 1`
     )
-    .get(today);
+    .get(localDayStartStamp(addDaysISO(today, -RISK_WINDOW_DAYS) ?? today));
   return !!row;
 }
 
@@ -79,10 +79,10 @@ function newFinding(today: string): boolean {
     .prepare(
       `SELECT 1 FROM health_directives
         WHERE status = 'active' AND domain = 'nutrition' AND COALESCE(uncertain, 0) = 0
-          AND date(created_at) >= date(?, '-${RISK_WINDOW_DAYS} days')
+          AND datetime(created_at) >= ?
         LIMIT 1`
     )
-    .get(today);
+    .get(localDayStartStamp(addDaysISO(today, -RISK_WINDOW_DAYS) ?? today));
   return !!row;
 }
 

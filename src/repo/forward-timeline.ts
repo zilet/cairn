@@ -22,7 +22,7 @@ import { currentLiftCapacities } from "./performance.js";
 import { strengthBenchmarkMilestones, type StrengthMilestoneInput } from "./training-milestones.js";
 import { doctorLoopItems, loopPolicySentence, type DoctorLoopItem } from "./doctor-loop.js";
 import { dexaRescanWindow, latestDexaDate } from "./dexa-window.js";
-import { addDaysISO, clipText, daysBetweenISO, localDateISO } from "./shared.js";
+import { addDaysISO, clipText, daysBetweenISO, localDateISO, stampLocalDay } from "./shared.js";
 import { blockPriority, objectiveMilestones, type BlockPriority, type ObjectiveFit, type PriorityTrack } from "./road-ahead.js";
 import { round1 } from "../lib/numbers.js";
 
@@ -299,7 +299,7 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
   try {
     const block = getActiveBlock();
     if (block && Number(block.total_weeks) > 0 && Number(block.week_index) < Number(block.total_weeks)) {
-      const started = iso(block.started_at) ?? String(block.started_at ?? "").slice(0, 10);
+      const started = stampLocalDay(block.started_at);
       const end = started ? addDaysISO(started, Number(block.total_weeks) * 7) : null;
       const delta = end ? daysBetweenISO(end, today) : null;
       if (end && delta != null && delta >= -OVERDUE_GRACE_DAYS) {

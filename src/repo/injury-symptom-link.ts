@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
-import { addDaysISO } from "./shared.js";
+import { addDaysISO, stampLocalDay } from "./shared.js";
 import { symptomAreaSpokenWord, symptomAreaVocabularyLabel, symptomAreaVocabularyLabels } from "./symptom-area.js";
 
 // ============================================================================
@@ -172,7 +172,7 @@ function injuryPlaceText(ev: any): string {
 function eventStart(ev: any): string | null {
   const start = String(ev?.start_date ?? "");
   if (/^\d{4}-\d{2}-\d{2}$/.test(start)) return start;
-  const created = String(ev?.created_at ?? "").slice(0, 10);
+  const created = stampLocalDay(ev?.created_at);
   return /^\d{4}-\d{2}-\d{2}$/.test(created) ? created : null;
 }
 

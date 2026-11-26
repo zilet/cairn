@@ -561,7 +561,7 @@ export function latestUserVetoAt(kind: string, domain?: string): string | null {
   try {
     const row = db
       .prepare(
-        `SELECT COALESCE(json_extract(context_json, '$.held_by_user_on'), date(created_at)) AS refused_on
+        `SELECT json_extract(context_json, '$.held_by_user_on') AS held_on, created_at
            FROM brain_decisions
           WHERE kind = ?
             AND (? = '' OR domain = ?)
@@ -571,8 +571,9 @@ export function latestUserVetoAt(kind: string, domain?: string): string | null {
                    created_at DESC, id DESC
           LIMIT 1`
       )
-      .get(key, scope, scope) as { refused_on?: string } | undefined;
-    const at = String(row?.refused_on ?? "").trim();
+      .get(key, scope, scope) as { held_on?: string; created_at?: string } | undefined;
+    // The stamp is a UTC instant: the refusal day is the athlete's own.
+    const at = String(row?.held_on ?? "").trim() || stampDay(row?.created_at);
     return at || null;
   } catch {
     return null;

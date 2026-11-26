@@ -8808,3 +8808,15 @@ shift the legs: rising weekly running or a distant race goal never explains a le
 And `isoDateTime` (`src/brain/contract-utils.ts`) reads a zone-less stamp as UTC, as
 `parseDbTime` does: `new Date()` read it as local time and moved a decision stamped from a
 database row by the UTC offset.
+
+**A stored stamp's day is the athlete's, never UTC (2026-11-26).** `created_at`, `decided_at`,
+`evaluated_at`, `status_at` and a block's `started_at` are UTC instants, so slicing their first ten
+characters, or SQL's `date(col)`, named tomorrow every evening west of Greenwich. Two helpers in
+`src/repo/shared.ts` replace both: `stampLocalDay(value)` (a bare date is kept as written, a stamp is
+re-keyed to the local day) and `localDayStartStamp(day)` (the UTC stamp of a local midnight, for a
+`datetime(col) >= ?` bound). Block boundaries, the recovery-week refusal day, "landed this week"
+reads, the lift-verdict ledger, the meal plan in force and the calendar's own "today" all read
+through them. Left alone on purpose: columns that hold a local date already
+(`context_events.resolved_at`, recovery-cycle `completed_at`/`canceled_at`, `measured_at`), the
+`COALESCE(date, substr(created_at, 1, 10))` fallbacks where the date is always written, an upload
+date standing in for a missing document date, and windows where both sides are UTC.

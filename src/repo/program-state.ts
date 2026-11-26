@@ -13,7 +13,7 @@
 // athlete (and the coach proposal) drive.
 // ============================================================================
 import { db } from "../db.js";
-import { daysBetweenISO, localDateISO } from "./shared.js";
+import { daysBetweenISO, localDateISO, stampLocalDay } from "./shared.js";
 import { latestWorkingSets, newestSlotByExercise, testedSlotAuthorship } from "./prescription-authorship.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
 import { getRecoverySummary } from "./coach.js";
@@ -1507,7 +1507,7 @@ function mesocycleMeasure(
   // is the effective phase. A young block, or a programmed deload/realization,
   // never reads deload-due — the block is the plan. Fresh only suppresses
   // deload-due; intensification / base-building / accumulation notes still run.
-  const startedOn = String(block?.started_at ?? "").slice(0, 10);
+  const startedOn = stampLocalDay(block?.started_at);
   const startedAgeDays = /^\d{4}-\d{2}-\d{2}$/.test(startedOn) ? daysBetweenISO(date, startedOn) : null;
   // …unless the loaded streak runs straight THROUGH the previous block's scheduled
   // deload into this one: a push athlete runs that week as intensification

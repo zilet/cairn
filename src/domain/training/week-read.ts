@@ -68,7 +68,7 @@ import { finishedRacesBetween, latestFinishedRace } from "../../repo/race-recove
 import { raceRunActivity } from "../../repo/race-results.js";
 import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
 import { athleteUnits } from "../../repo/settings.js";
-import { localDateISO } from "../../repo/shared.js";
+import { localDateISO, stampLocalDay } from "../../repo/shared.js";
 import { buildMarkFor } from "../../repo/performance.js";
 import {
   capacityEnvelopeAsOf,
@@ -1508,13 +1508,13 @@ function finishedBlocks(today: string): FinishedBlockRef[] {
   const out: FinishedBlockRef[] = [];
   blocks.forEach((b, i) => {
     if (b.status !== "completed") return;
-    const started = String(b.started_at ?? "").slice(0, 10);
+    const started = stampLocalDay(b.started_at);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(started)) return;
     // Run through (week_index past total_weeks) or closed at its current week.
     const ran = Math.max(1, Math.min(Number(b.total_weeks) || 1, Number(b.week_index) || 1));
     let end = addDaysISO(started, ran * 7 - 1) ?? started;
     // listBlocks is newest first: the block before this one in the list started after it.
-    const next = i > 0 ? String(blocks[i - 1].started_at ?? "").slice(0, 10) : "";
+    const next = i > 0 ? stampLocalDay(blocks[i - 1].started_at) : "";
     if (next && next > started) end = [end, addDaysISO(next, -1) ?? end].sort()[0];
     if (end > today) end = today;
     out.push({ focus: String(b.focus), weeks: ran, end_date: end });

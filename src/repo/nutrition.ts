@@ -40,6 +40,8 @@ import {
   mealLabelForTime,
   approxTimeForMealLabel,
   addDaysISO,
+  stampLocalDay,
+  localDayStartStamp,
 } from "./shared.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpFoodDataVersion } from "./training-cache.js";
@@ -717,7 +719,7 @@ function mealPlanCalendarAgeDays(plan: any): number | null {
   const stamped = plan?.week_of
     ? String(plan.week_of).slice(0, 10)
     : plan?.created_at
-      ? String(plan.created_at).slice(0, 10)
+      ? stampLocalDay(plan.created_at)
       : null;
   if (!stamped) return null;
   return daysBetweenISO(localDateISO(), stamped);
@@ -1417,10 +1419,10 @@ function mealPlanInForceAt(windowEnd: string): any | null {
     rows = db
       .prepare(
         `SELECT * FROM meal_plans
-          WHERE status IN ('accepted', 'applied', 'kept') AND date(created_at) <= date(?)
+          WHERE status IN ('accepted', 'applied', 'kept') AND datetime(created_at) < ?
           ORDER BY id DESC LIMIT 50`
       )
-      .all(windowEnd) as any[];
+      .all(localDayStartStamp(addDaysISO(windowEnd, 1) ?? windowEnd)) as any[];
   } catch {
     rows = [];
   }

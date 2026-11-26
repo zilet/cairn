@@ -69,7 +69,7 @@ import {
   readCutPressureStrict,
 } from "./progression.js";
 import { inRaceRecovery } from "./race-recovery.js";
-import { joinList, localDateISO } from "./shared.js";
+import { joinList, localDateISO, stampLocalDay } from "./shared.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { activeRelevantTrainingSymptoms } from "./training-symptoms.js";
 import { tripEventOn } from "./travel-days.js";
@@ -1387,7 +1387,7 @@ export function coverageSettlingKeys(date = localDateISO()): Set<string> | null 
       if (!keys.length || keys.every((key) => settling.has(key))) continue;
       const ended = (windowEnd.get(row.decision_id) as any)?.window_end;
       if (ended && String(ended).slice(0, 10) < today) continue; // judged: done or missed
-      const landed = String(row.effective_date ?? row.created_at ?? "").slice(0, 10);
+      const landed = stampLocalDay(row.effective_date ?? row.created_at);
       const lifts: string[] = (Array.isArray(parsed?.changes) ? parsed.changes : [])
         .map((change: any) => String(change?.exercise ?? "").trim())
         .filter(Boolean);

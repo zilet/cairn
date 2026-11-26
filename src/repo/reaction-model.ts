@@ -27,7 +27,7 @@ import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { normalizedExerciseKey, canonicalGroup, isMobility, resolveExerciseName, sameLiftName } from "./exercise-canon.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { addMemory } from "./memory.js";
-import { addDaysISO, localDateISO, metricLabel } from "./shared.js";
+import { addDaysISO, localDateISO, metricLabel, stampLocalDay, localDayStartStamp } from "./shared.js";
 // Single sources of truth (function-level cycle, resolved at call time — the same
 // pattern coach↔intelligence↔propagation already rely on): the acute-marker classifier
 // (with its chronic-cluster guard) and the prior-week training-load helpers.
@@ -701,7 +701,7 @@ function interventionMarker(): ReactionPattern | null {
       )
       .all() as any[];
     for (const d of dirs) {
-      const dt = String(d.status_at).slice(0, 10);
+      const dt = stampLocalDay(d.status_at);
       if (dt) intervs.push({ date: dt, marker: String(d.marker), label: "a resolved finding" });
     }
   } catch {
@@ -717,7 +717,7 @@ function interventionMarker(): ReactionPattern | null {
     // Plan/meal applies aren't tied to a specific marker — recorded but
     // marker-less, so they can't anchor a marker series on their own here.
     for (const p of [...props, ...meals]) {
-      const dt = String(p.created_at ?? "").slice(0, 10);
+      const dt = stampLocalDay(p.created_at);
       if (dt) intervs.push({ date: dt, marker: null, label: "a plan change" });
     }
   } catch {
@@ -2436,11 +2436,11 @@ export function liftLedgerRead(exercise: string): LiftLedgerRead {
             AND COALESCE(x.subject_key, '') <> ''
             AND d.superseded_by IS NULL
             AND d.status NOT IN ('rejected','reverted','superseded','canceled')
-            AND date(e.evaluated_at) >= ?
+            AND datetime(e.evaluated_at) >= ?
           ORDER BY e.evaluated_at DESC, e.id DESC
           LIMIT 200`
       )
-      .all(...LIFT_LEDGER_METRICS, since) as Array<{
+      .all(...LIFT_LEDGER_METRICS, localDayStartStamp(since)) as Array<{
       verdict: string;
       evaluated_at: string;
       subject_key: string | null;
@@ -2467,7 +2467,7 @@ export function liftLedgerRead(exercise: string): LiftLedgerRead {
     .slice(0, LIFT_LEDGER_MAX_VERDICTS)
     .map((row) => ({
       outcome: (row.verdict === "not_aligned" ? "missed" : "aligned") as "aligned" | "missed",
-      decided_on: String(row.evaluated_at ?? "").slice(0, 10),
+      decided_on: stampLocalDay(row.evaluated_at),
     }))
     .filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(row.decided_on));
   return { verdicts, informative: verdicts.length >= LIFT_LEDGER_MIN_VERDICTS };

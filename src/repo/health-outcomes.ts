@@ -15,6 +15,7 @@ import { canonicalMarker } from "./marker-canon.js";
 import { markerValidityHorizons } from "./marker-validity.js";
 import { addMemory } from "./memory.js";
 import { capStr } from "./nutrition.js";
+import { stampLocalDay } from "./shared.js";
 import { markerSide, matchOptimalZone, optimalDistance, withinOptimal } from "./propagation-data.js";
 import { round1 } from "../lib/numbers.js";
 
@@ -394,7 +395,7 @@ function outcomeLearnedAt(annotation: HealthOutcomeAnnotation): string | null {
           WHERE source = 'health_outcome' AND source_ref_key = ? ORDER BY id LIMIT 1`
       )
       .get(eventSourceRef(annotation)) as { created_at?: string } | undefined;
-    const at = String(row?.created_at ?? "").slice(0, 10);
+    const at = stampLocalDay(row?.created_at);
     return /^\d{4}-\d{2}-\d{2}$/.test(at) ? at : null;
   } catch {
     return null;

@@ -4,7 +4,7 @@ import { emitBrainEvent } from "../brainEvents.js";
 import { detectStrengthCalibration } from "./calibration.js";
 import { reconcileDailySessionSafe } from "./daily-reconciliation.js";
 import { sessionNoteSuggestsFatigue } from "./training-fatigue.js";
-import { localDateISO, localHourFraction } from "./shared.js";
+import { localDateISO, localHourFraction, addDaysISO } from "./shared.js";
 import {
   isStrengthGarminType,
   listActivities,
@@ -1944,7 +1944,7 @@ export function weeklyAerobicLoad(weekStartISO?: string): WeeklyAerobicLoad {
 }
 
 export function getVolumeByMuscle(days = 30) {
-  const cutoff = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  const cutoff = addDaysISO(localDateISO(), -days) ?? localDateISO();
   // UNIFIED onto the ONE honest-volume truth (effectiveVolumeByGroup): folds sets
   // onto CANONICAL groups (not a raw muscle_group + 'other' bucket), excludes warmups,
   // weights by proximity-to-failure, and credits ~0.5 indirect sets — the same model
@@ -1975,12 +1975,13 @@ export function getVolumeByMuscle(days = 30) {
 }
 
 export function getTrainingCalendar(days = 84) {
-  const cutoff = new Date(Date.now() - (days - 1) * 864e5).toISOString().slice(0, 10);
+  const today = localDateISO();
+  const cutoff = addDaysISO(today, -(days - 1)) ?? today;
 
   // Build complete date range in JS so empty days are present.
   const dates: string[] = [];
   for (let i = days - 1; i >= 0; i--) {
-    dates.push(new Date(Date.now() - i * 864e5).toISOString().slice(0, 10));
+    dates.push(addDaysISO(today, -i) ?? today);
   }
 
   // Aggregate lifting data per day — tonnage only ever counts loaded working sets

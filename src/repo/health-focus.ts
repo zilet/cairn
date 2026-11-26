@@ -13,7 +13,7 @@ import {
 } from "./propagation.js";
 import { listWeight } from "./profile.js";
 import { dailyManualWeighIns } from "./bodyweight.js";
-import { localDateISO } from "./shared.js";
+import { localDateISO, addDaysISO } from "./shared.js";
 import { injuryClosuresOn } from "./injury-symptom-link.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 import { presentMarkerRow, renderLabQuantities } from "./lab-display.js";
@@ -436,7 +436,7 @@ function newerMaterialNutritionTargetThan(synthesis: any): boolean {
 // (a separate leaf computation, not a shared import) so this file's drift
 // signature has no coupling to that module's shape.
 function weightTrendBucket(today: string): "up" | "down" | "flat" | "none" {
-  const since = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
+  const since = addDaysISO(today, -21) ?? today;
   // One weigh-in per day (dailyManualWeighIns), so a double-logged day never tilts the slope.
   const pts = dailyManualWeighIns({ since, through: today }) as any[];
   if (pts.length < 2) return "none";
