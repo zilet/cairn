@@ -226,7 +226,9 @@ inside the codebase.
 - Keep `.env`, `data/`, SQLite files, exported archives, generated logs, and
   local backups out of Git. The committed `.gitignore` and `.dockerignore`
   already exclude those paths.
-- Run `npm run verify` before tagging.
+- Run `npm run verify` before tagging. A release commit that changes only `CHANGELOG.md` and the
+  version in `package.json` / `package-lock.json` needs no second run when the commit under it
+  already passed: the release workflow verifies the tag again before it publishes anything.
 - Push a `v*` tag and wait for the release workflow to pass.
 - **Make the GitHub repository public** (GitHub → repo → Settings → General →
   Danger Zone → Change visibility). This is a one-time owner action.

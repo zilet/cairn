@@ -372,6 +372,9 @@ function envFor(dir) {
   // starts with it set would serialize its results for a parent that is not there.
   // test/_isolate.mjs sets it for the file once the reporter is in place.
   delete env.NODE_TEST_CONTEXT;
+  // The shard is this runner's selection, never a file's: a test that starts a runner of
+  // its own would otherwise have its fixtures sliced away on every shard but one.
+  delete env.CAIRN_TEST_SHARD;
   return env;
 }
 
