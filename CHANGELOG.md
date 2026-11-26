@@ -5,6 +5,49 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-11-25
+
+Cairn used to grade your lifts one by one and ask you what to do about each. It now coaches the
+way a good coach does: it watches the movement and the muscle, makes the small calls itself, tells
+you what it did, and leaves you an Undo.
+
+### Added
+
+- **Progress by movement and muscle.** A press is a press whichever bar you used today. Swapping
+  an exercise no longer resets its history, and a lift you have not done in weeks is resting, not
+  stalled.
+- **The coach acts instead of asking.** An earned recovery week, a load step, an extra set, a
+  move to a new rep range and an accessory rotation land by themselves, each with a reason and a
+  one-tap Undo. Trip days, returning pain, stale holds and coverage gaps settle the same way, so
+  Today keeps only what needs you.
+- **One ladder for a plateau.** When a movement stops climbing, the coach picks the next lever in
+  order: wait, rep range, effort, volume, then a variation. At most one structural change a lift
+  a week.
+- **Lifts and runs as one week.** Running and lifting are planned against each other, and for a
+  strength-led athlete running never excuses the legs from their work.
+- **Your road on Horizon.** The road covers the whole journey, with a step for each week walked
+  and dated stones for what you did. A lift goal follows its movement through a plan swap and
+  shows the next mark for your own build.
+- **Calories for each day.** Every day's number follows the plan and the work you logged, the
+  meal plan sizes each day to it, and a week strip shows how fuel is going. Food guides explain
+  themselves and name their sources.
+- **Reps goals, mobility checks and chat that can look things up.**
+
+### Fixed
+
+- **One lift, one name.** A spelling can no longer split a lift into two histories.
+- **Evenings stay today.** Block weeks, recovery-week decisions, the training calendar and "this
+  week" reads counted the day in UTC, so after early evening they could read a day ahead. They now
+  use your local day.
+- **A saved set stays on screen.** Coming back to the app no longer repaints the log without sets
+  the server already has, and a cold open of a session is faster.
+- **A press slot takes a press.** Flat-press and overhead-press slots no longer accept a lift from
+  another movement.
+
+### Changed
+
+- Node 26.13.1 and dependency updates.
+
 ## [2.4.3] — 2026-11-17
 
 Horizon shows every lift goal in one row, and a low blood pressure that is simply your level
