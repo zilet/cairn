@@ -3,6 +3,7 @@ import { truncateAtWord } from "../brain/contract-utils.js";
 import { normalizePrescriptionItem, SESSION_PRESCRIPTION_LIMITS } from "../contracts/session-prescription.js";
 import { enforceSupersetRules, validSupersetGroup } from "./composition-pairing.js";
 import { deterministicComposedSession, normalizeComposedSession } from "./daily-composition.js";
+import { todaySetQualityLifts } from "./today-set-quality.js";
 import {
   decideDailySession,
   isTrainIntentOverride,
@@ -901,7 +902,9 @@ function adaptiveSnapshotFromDecision(envelope: DailyDecisionEnvelope) {
     // routine ABSENCE, so it carries the code the preview surfaces answer with null.
     fail(DAILY_SESSION_NO_TEMPLATE, "no weekly template day is available for this date");
   }
-  const session = deterministicComposedSession(envelope);
+  // The plateau ladder's effort lever (train reads only; failing closed to no note).
+  const setQuality = todaySetQualityLifts(envelope.date, envelope);
+  const session = deterministicComposedSession(envelope, setQuality ? { setQuality } : {});
   // The same absence one step later: a template day that composes to nothing has no
   // candidate to preview either, and normalizeSessionPayload would report it as
   // "session items are required" — a malformed-input message for what is in fact an
@@ -1448,6 +1451,11 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
   // given: on the job, at the moment the athlete asks (see /session-suggest's
   // train_anyway and agentDecisionOpts).
   const manualPlan = source === "manual_plan" ? planSnapshot(date, input.day_number) : null;
+  // The plateau ladder's effort lever for the card composed below (train reads only; a
+  // short note, never a load or a set; failing closed to no note).
+  const setQuality =
+    decision && (manualPlan || canonicalAgent) ? todaySetQualityLifts(decision.envelope.date, decision.envelope) : null;
+  const withSetQuality = setQuality ? { setQuality } : {};
   const boundedManual =
     manualPlan && decision
       ? normalizeComposedSession(
@@ -1465,7 +1473,8 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
           // lighter. The day they chose is still the day they get — and it is a
           // snapshot: nothing is added or raised on top of it (no reach, no earned
           // floor, no progression step above what they wrote).
-          { substituteSaturated: true, planSnapshot: true }
+          // The effort note changes no load and no set, so a snapshot carries it too.
+          { substituteSaturated: true, planSnapshot: true, ...withSetQuality }
         ).session ??
         // Pass the live envelope so reconcile and persist share one object.
         deterministicComposedSession(
@@ -1478,13 +1487,13 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
               intent: "template",
             },
           }),
-          { planSnapshot: true }
+          { planSnapshot: true, ...withSetQuality }
         )
       : null;
   const boundedAgent =
     canonicalAgent && decision
-      ? normalizeComposedSession(canonicalAgent.session, decision.envelope).session ??
-        deterministicComposedSession(decision.envelope)
+      ? normalizeComposedSession(canonicalAgent.session, decision.envelope, withSetQuality).session ??
+        deterministicComposedSession(decision.envelope, withSetQuality)
       : null;
   const prepared =
     source === "adaptive_plan" && decision

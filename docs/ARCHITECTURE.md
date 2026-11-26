@@ -8685,3 +8685,115 @@ detection on every tick of the window.
 `get_goal_review`, `review_goal` (`src/surfaces/mcp/goal-reviews.ts`). DTOs in
 `src/contracts/goal-reviews.ts`. The PWA: `src/client/horizon-behind-client.ts` (lazy horizon bundle),
 styles in `src/styles/horizon/behind.css`.
+
+## Units drive the decisions, the plateau ladder, lifts and runs as one week (2026-11-26)
+
+The capability read (above) stopped being a read only. Everything that used to count single
+lifts now reads movement units through `src/repo/capability-consumers.ts`.
+
+**Unit identity.** `capabilityUnitOf` resolves a lift by: the curated region table
+(`movement-region.ts`), then the progress-only families (`capability-region.ts`,
+`progressRegionKey`: tibialis, hip abduction/adduction, front raise, upright row, shrug,
+straight-arm pull, chest fly, hip thrust, glute kickback, back extension, carry, four core
+families), then the compound pattern, then the agent profile, then one catch-all per pattern.
+The progress-only table is never read by a card: `movementRegionKey` stays null for those
+lifts, so pairing, folding and effect tiers are unchanged. A catch-all is said as "Other X
+work" beside a named unit, needs `CATCH_ALL_MIN_LIFTS`, and a lone leftover lift is unlisted
+while its sets still count toward the muscle. A verdict needs `UNIT_MIN_SESSIONS` honest
+sessions; slipping needs `SLIPPING_MIN_WINDOW_SESSIONS` in the current window with declines
+counted per session. A muscle's direction must agree with its MAIN unit (the one carrying most
+of its recent work, `MUSCLE_DIRECTION_SHARE`); slipping also needs
+`MUSCLE_SLIPPING_MIN_WORK_SHARE`; `UNIT_NEVER_CREDITS` keeps a tibialis raise out of the
+calves in this read (the volume ledger still files it under calves: removing that credit
+would open calf floor and coverage findings).
+
+**Consumers.** Program state carries the read as `capability`, computed in a capability pass;
+while a pass runs every program-state read is a partial state under its own memo key, so the
+recursion stops at one level. On top of it:
+- the deload fatigue arm: `FATIGUE_MIN_SLIPPING_UNITS` compound in-plan units slipping, the
+  `recovery` qualifier never counting and a run build explaining only lower-body units;
+- the volume step: a group earns a set only through an in-plan unit that is holding with
+  enough exposures (`VOLUME_STEP_MIN_UNIT_EXPOSURES`); a climbing unit needs nothing, a
+  slipping unit blocks the group, and the set goes to a plan lift of the holding unit;
+- the under-fuelling stall arm (`energy-deficiency.ts`) and performance channel
+  (`underfueling.ts`): compound in-plan units, resting lifts never counting;
+- the headline, `adaptations_due`, plateau plays, support work, milestones, the muscle
+  trajectory and movement standing (thin adapters over the read);
+- the coach, chat and program prompts: a compact `capability` key plus the HOW TO JUDGE
+  PROGRESS rule (a swap inside a unit is not a reset; a unit holding through a cut or run
+  build is the plan working; a resting lift is never stalled).
+When the capability read itself fails, the protective arms fall back to the lift rule over
+non-resting lifts: a thrown read never switches protection off.
+
+**The plateau ladder** (`src/repo/unit-plateau.ts`, `unitPlateauLadder(date)`). One next
+lever per in-plan unit, each tried once per plateau: `wait` (a qualifier explains it, the
+plateau is younger than `PLATEAU_MIN_WEEKS`/`PLATEAU_MIN_SESSIONS`, the engine is moving the
+lift, a fresh prescription, pain, a timed lift, or the unit is slipping: a slip never gets
+volume or variation), `rep_scheme` (a higher rep range at the held load), `set_quality`
+(logged RIR of `SET_QUALITY_RIR`+ on most rated sets: a note, never a load), `volume` (the
+existing volume step), `variation` (a same-unit lift, at a block boundary, once per unit per
+block). `capabilityWithLadder` puts the lever on each unit as `next` for
+`GET /api/strength-capability` / `get_strength_capability` and Progress shows it unless it is
+wait. `adaptations_due` words a holding unit only from the ladder, the prompts carry
+`DATA.unit_plateau`, and the progression engine's own vary/introduce on a covered unit holds
+at the same load unless the ladder's lever is variation (`nextPrescription(..., {ladder})`;
+`null` means engine only; `unitLadderInFlight` keeps the recursion one level deep).
+
+**The server's own ladder changes** (`src/domain/brain/unit-plateau-change.ts`, scheduler slot
+`unit_plateau_check_date`): the rep-range move and an accessory's rotation land through
+ordinary autonomy with Undo and a registered premise. Bounds: `MAX_UNITS_PER_WEEK`, one
+change per unit per block, never a compound anchor's rotation (left to the redraw), no
+rep-range move on the day's anchor or below `AUTONOMOUS_REP_SCHEME_MIN_REP_LOW`, never a slot
+the engine is re-grounding, never a lift on more than one plan day, never a lift with pain, an
+injury, an adaptation, a constraint note or a fresh prescription. At landing the premise holds
+when the incoming lift became protected and is gone when the ladder's candidate changed. Undo,
+Hold or discard is a remembered no for that plateau. **One server-owned structural change per
+lift per week** (`src/repo/lift-structural-change.ts`): the volume step and the ladder each
+hold a lift while the other has an open or landed-this-week change on it, at creation and in
+both premises.
+
+**A new variant's first load** (`src/repo/variant-start.ts`): a lift entering the plan with no
+history of its own (a swap, an append, a `restructure` redraw) starts from a sibling trained
+within `SIBLING_CURRENT_DAYS`, times the transfer ratio (learned first, else the table), times
+`NEW_VARIANT_START_FACTOR`, rounded down to the load step, and is stamped untested. A written
+load is never overwritten; assisted, bodyweight and timed lifts keep the old behaviour.
+
+**A gym substitution** (`src/repo/unit-substitution.ts`, read by `daily-reconciliation.ts`): a
+logged lift that is not on the card but is in the same unit as a planned lift he did not do
+satisfies that slot (exact name always wins, one logged lift per slot, a compound slot only
+takes a compound, an explicitly skipped slot is never a target). Its dose is keyed
+`unit_substitute:<key>`, so it is never an exposure of the planned lift; a machine compound
+filling a free-weight compound slot reads as `substituted_slots`, neither completed nor
+skipped.
+
+**Lifts and runs as one week** (`stress-budget.ts`, `composition-eve.ts`,
+`key-run-proximity.ts`, `week-layout.ts`). Outside a race build the key-run eve still speaks,
+tighter (`scope:"standing"`): on the last lift day before tomorrow's placed quality or long
+run the budget names the lower accessories it trims (`trim_exercises`) and composition takes
+exactly one set off each (`STANDING_EVE_SETS_OFF`, floor `STANDING_EVE_MIN_SETS`) at the held
+load, recorded and said on the card; compounds and the anchor stay as written, and it stands
+down for the weekly lower guarantee, a safety floor, a run already done, an endurance-led
+protect and a same-day request. Inside either eve the week's last heavy lower exposure keeps
+its squat/hinge groups whole (`weekly_heavy_anchor_kept`). Where the heaviest lower day sits
+against the key runs is one rule shared by the live placement (`keyRunAwarePlacement`) and the
+week layout's `lower_lift_placement` read (`eve_of_key_run` / `on_key_run` / `after_key_run` /
+`neutral`); it is a read and a prompt line, never a move of a stated weekday.
+
+**Exercise profile.** The profile job records its own `agent_runs` row per attempt (a busy
+host defers and records nothing). A `legacy` muscle group follows a high-confidence agent
+profile only when the curated tables name the same group; the correction is kept with its
+previous value in `exercise_group_corrections`. The enrichment prompt no longer sends the
+stored constraint note.
+
+**Protection read by movements is never narrower than the lift rules it replaced.** A failed
+capability read on a finished state falls back to the lift rules (`regressionWitnessCount`,
+`liftStallByLifts`, the lift tally). The under-fuelling stall arm and performance channel
+count any graded unit with a lift trained in the current window, with no qualifier exemption,
+met at `LIFT_STALL_MIN_UNITS`. The fatigue arm counts compound in-plan slides: a cut never
+explains one, a recovery week does, and a run build does for the legs only. A bare
+`capabilityRead` and today's effort note reuse what program state's pass computed
+(`finishedCapabilityRead`, `finishedPlateauLadder`, `today-set-quality.ts`); request signals
+key partial states through `programStateSignalKey`; a plan-day pass reads the ladder once
+(`onceLadder`). The effort note is one plain-words line a session on the plan lift of a unit
+whose lever is `set_quality`, never a load or set change. The stress decision's new fields
+(`scope`, `trim_exercises`, `guard`) moved the daily decision to `daily_decision_v9`.

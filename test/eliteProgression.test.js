@@ -128,13 +128,15 @@ test("C5: a long-tenure STEADY lift reaches the 'introduce' action with same-pat
   const plan = [[98, 200], [70, 200], [42, 200], [21, 200], [0, 203]];
   for (const [d, w] of plan) logSet("Back Squat", isoDaysAgo(d), { weight: w, reps: 8, rir: 2 });
 
-  const p = nextPrescription("Back Squat");
+  // The engine's own rotation, read without the plateau ladder (`ladder: null`); the
+  // ladder's deferral of a covered movement is pinned in ladderWiring.test.js.
+  const p = nextPrescription("Back Squat", undefined, { ladder: null });
   assert.equal(p.action, "introduce", "a steady long-run lift invites a fresh variation before staleness");
   assert.ok(Array.isArray(p.vary_options) && p.vary_options.length > 0, "carries a menu of same-pattern options");
   assert.equal(p.suggested.weight, 203, "load is held — the novelty is the stimulus");
 
   // And the apply turns that into a real swap change (not a no-op same-lift write).
-  const prop = buildProgressionProposal(1);
+  const prop = buildProgressionProposal(1, { ladder: null });
   assert.equal(prop.ok, true);
   assert.ok(prop.proposal.parsed.changes.some((c) => c.swap && /Back Squat/i.test(c.swap.from)), "introduce → a swap change");
 });
@@ -153,7 +155,7 @@ test("C5: a lift is never rotated into its own other spelling", async () => {
   const plan = [[98, 40], [70, 40], [42, 40], [21, 40], [0, 43]];
   for (const [d, w] of plan) logSet("Dumbbell Biceps Curl", isoDaysAgo(d), { weight: w, reps: 8, rir: 2 });
 
-  const p = nextPrescription("Dumbbell Biceps Curl");
+  const p = nextPrescription("Dumbbell Biceps Curl", undefined, { ladder: null });
   assert.equal(p.action, "introduce");
   assert.ok(p.vary_options.length > 0, "real variations are still offered");
   for (const option of [p.vary_to, ...p.vary_options.map((o) => o.name)]) {

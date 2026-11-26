@@ -23,6 +23,7 @@ import {
   type FullLoadReference,
 } from "./outcome-comparability.js";
 import { painAreaLoadsExercise } from "./pain-relevance.js";
+import { matchUnitSubstitutions } from "./unit-substitution.js";
 import { registerDailyOutcomeReconcileHook } from "./reconciliation-hooks.js";
 import { recoveryCycleAt } from "./recovery-cycles.js";
 import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
@@ -79,6 +80,23 @@ export interface DailySessionOutcomeFacts {
   substituted: string[];
   skipped: string[];
   reordered: boolean;
+  /**
+   * Card slots a same-unit lift satisfied (unit-substitution.ts): the planned lift reads
+   * completed (like_for_like) or in `substituted_slots` (machine_for_free_weight), never
+   * skipped; the logged one is not in `substituted`. Present only when there is one.
+   */
+  unit_substitutions?: Array<{
+    planned: string;
+    logged: string;
+    unit: string;
+    kind: "like_for_like" | "machine_for_free_weight";
+  }>;
+  /**
+   * Free-weight compound slots a machine compound of the same movement filled (a leg press
+   * for the back squat): done by a same-movement lift, so neither completed nor skipped.
+   * Present only when there is one.
+   */
+  substituted_slots?: string[];
   /**
    * Present when the card was ADOPTED onto a session the athlete had already lived on
    * (adaptive-session.ts adoptionProvenance): the work logged before `adopted_at` was
@@ -203,7 +221,20 @@ export interface MovementDoseEvidence {
   // written before schema_version 3; derived at read time for those.
   comparable: boolean;
   non_comparable_reasons: string[];
+  // Present only when a same-unit lift the card did not name satisfied this slot
+  // (unit-substitution.ts): the lift that did, and the unit they share. Its load fields
+  // are null and it is never comparable (`unit_substitute`).
+  substituted_by?: string;
+  unit_key?: string;
 }
+
+/** The per-dose reason a slot another variant of its unit satisfied is not load evidence. */
+export const UNIT_SUBSTITUTE = "unit_substitute";
+/**
+ * The prefix on a satisfied slot's `movement_key`: the dose is another lift's work, so it is
+ * never keyed as the planned lift's movement (training-response.ts reads doses by key).
+ */
+export const UNIT_SUBSTITUTE_KEY_PREFIX = "unit_substitute:";
 
 export interface DoseContext {
   recovery: boolean;
@@ -943,21 +974,60 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   }
 
   const loggedExercises = [...achievedMap.values()].map((a) => a.exercise);
+  // THE GYM SWAP (unit-substitution.ts). After the exact match, a logged lift the card did
+  // not name satisfies a card slot nothing logged matched when both sit in the same
+  // movement unit — one logged lift per slot, exact identity always first. The slot then
+  // reads done by a same-movement lift (never skipped) and the logged lift is not an extra;
+  // its dose below credits the sets and reps but is never comparable load evidence and never
+  // an exposure of the PLANNED lift (another variant's work). A slot the athlete explicitly
+  // skipped is never a target: the skip is his word about that slot, and it stands.
+  const skippedKeys = new Set(skips.map((s) => identityOf(s)));
+  const unitSubstitutions = cardUntouched
+    ? []
+    : matchUnitSubstitutions(
+        items
+          .filter((it: any) => !achievedMap.has(identityOf(it.exercise)) && !beforeAdoption(identityOf(it.exercise)))
+          .filter((it: any) => !skippedKeys.has(identityOf(it.exercise)))
+          .filter((it: any) => it.mode !== "timed" && finite(it.target_seconds) == null)
+          .map((it: any) => ({
+            key: identityOf(it.exercise),
+            exercise: String(it.exercise),
+            group: it.muscle_group == null ? null : String(it.muscle_group),
+          })),
+        [...achievedMap.entries()]
+          .filter(([key, value]) => !suggestedSet.has(key) && !beforeAdoption(key) && value.top_seconds == null)
+          .map(([key, value]) => ({ key, exercise: value.exercise, group: value.muscle_group }))
+      );
+  const substituteForSlot = new Map(unitSubstitutions.map((sub) => [sub.slot_key, sub]));
+  const slotSatisfiedBy = new Set(unitSubstitutions.map((sub) => sub.logged_key));
+  // A free-weight compound slot a machine compound filled (a leg press for the back squat)
+  // trained the movement, but it is not the lift the card asked for: it reads in its own
+  // list (`substituted_slots`), never `completed` and never `skipped`.
+  const machineForFreeWeight = new Set(
+    unitSubstitutions.filter((sub) => sub.kind === "machine_for_free_weight").map((sub) => sub.slot_key)
+  );
   // Work logged before an adopted card is neither done-as-suggested, a substitution, nor
   // the reason a card item reads as skipped: it was never done against this card.
   const completed = suggestedExercises.filter(
-    (ex) => achievedMap.has(identityOf(ex)) && !beforeAdoption(identityOf(ex))
+    (ex) =>
+      (achievedMap.has(identityOf(ex)) ||
+        (substituteForSlot.has(identityOf(ex)) && !machineForFreeWeight.has(identityOf(ex)))) &&
+      !beforeAdoption(identityOf(ex))
   );
+  const substitutedSlots = suggestedExercises.filter((ex) => machineForFreeWeight.has(identityOf(ex)));
   const substituted = [...achievedMap.entries()]
-    .filter(([key]) => !suggestedSet.has(key) && !beforeAdoption(key))
+    .filter(([key]) => !suggestedSet.has(key) && !beforeAdoption(key) && !slotSatisfiedBy.has(key))
     .map(([, value]) => value.exercise);
   const skippedSuggested = cardUntouched
     ? []
-    : suggestedExercises.filter((ex) => !achievedMap.has(identityOf(ex)));
+    : suggestedExercises.filter((ex) => !achievedMap.has(identityOf(ex)) && !substituteForSlot.has(identityOf(ex)));
   const skipped = Array.from(
     new Set([
       ...skippedSuggested,
-      ...skips.filter((s) => suggestedSet.has(identityOf(s)) && !beforeAdoption(identityOf(s))),
+      ...skips.filter(
+        (s) =>
+          suggestedSet.has(identityOf(s)) && !beforeAdoption(identityOf(s)) && !substituteForSlot.has(identityOf(s))
+      ),
     ])
   );
 
@@ -974,9 +1044,14 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   // while composition_item_key anchors the exact historical item.
   type BaseDose = Omit<MovementDoseEvidence, "comparable" | "non_comparable_reasons">;
   const base_dose_evidence: BaseDose[] = items.map((it: any, index: number) => {
-    const agg = achievedMap.get(identityOf(it.exercise));
+    // A slot a same-unit lift satisfied reads that lift's work: its sets and reps count
+    // against the slot's set count and rep range, and its symptoms are the ones that apply.
+    // The slot's LOAD was written for another variant, so it is not carried (a load is
+    // never compared across lifts) and there is no full-load reference.
+    const substitute = substituteForSlot.get(identityOf(it.exercise)) ?? null;
+    const agg = achievedMap.get(substitute ? substitute.logged_key : identityOf(it.exercise));
     const exercise = {
-      name: String(it.exercise),
+      name: substitute ? substitute.logged : String(it.exercise),
       muscle_group: agg?.muscle_group ?? null,
     };
     const symptomEvents = activeRelevantTrainingSymptoms(date, exercise);
@@ -984,8 +1059,8 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
       sets: finite(it.sets),
       rep_low: finite(it.rep_low),
       rep_high: finite(it.rep_high),
-      target_weight: finite(it.target_weight),
-      target_seconds: finite(it.target_seconds),
+      target_weight: substitute ? null : finite(it.target_weight),
+      target_seconds: substitute ? null : finite(it.target_seconds),
     };
     const achievedDose: MovementDoseEvidence["achieved"] = {
       sets: agg?.sets ?? 0,
@@ -996,21 +1071,32 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
       total_seconds: agg?.total_seconds ?? 0,
       sets_detail: agg?.sets_detail ?? [],
     };
-    const movement_key = movementIdentity(String(it.exercise));
+    // A satisfied slot's dose is the OTHER lift's work: it is never keyed as the planned
+    // lift's movement, so no read keyed on the planned lift (the movement-response ledger,
+    // a per-lift dose lookup) ever takes it as that lift's exposure. Its own history (its
+    // logged sets) is untouched; the slot still names the planned lift in `exercise`.
+    const movement_key = substitute
+      ? `${UNIT_SUBSTITUTE_KEY_PREFIX}${movementIdentity(String(it.exercise))}`
+      : movementIdentity(String(it.exercise));
     const intent_key = intentIdentity(it);
     const mode: MovementDoseEvidence["mode"] =
       it.mode === "timed" || finite(it.target_seconds) != null ? "timed" : "reps";
     // An athlete override keeps its plan-day link for the day's name and the ring, but
     // its prescription is the athlete's own — never the plan day's full-load anchor.
-    const full_load_reference = fullLoadReferenceFor(
-      String(it.exercise),
-      date,
-      composition.plan_day_id == null || composition.source === "athlete_override"
-        ? null
-        : Number(composition.plan_day_id)
-    );
-    const performed_at_full_load = evaluatePerformedAtFullLoad(mode, achievedDose, full_load_reference);
+    const full_load_reference = substitute
+      ? null
+      : fullLoadReferenceFor(
+          String(it.exercise),
+          date,
+          composition.plan_day_id == null || composition.source === "athlete_override"
+            ? null
+            : Number(composition.plan_day_id)
+        );
+    const performed_at_full_load = full_load_reference
+      ? evaluatePerformedAtFullLoad(mode, achievedDose, full_load_reference)
+      : false;
     return {
+      ...(substitute ? { substituted_by: substitute.logged, unit_key: substitute.unit } : {}),
       composition_item_key: `composition:${Number(composition.id)}:item:${Number(it.position ?? index)}`,
       movement_key,
       intent_key,
@@ -1114,6 +1200,7 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
       reason_codes.push("extended_session");
     }
   }
+  if (unitSubstitutions.length) reason_codes.push("unit_substituted");
   if (gradedMatchedEndurance.length > 0) reason_codes.push("endurance_matched");
   if (enduranceDoseShortfall) reason_codes.push("endurance_dose_shortfall");
   if (enduranceQualityNotObserved) reason_codes.push("endurance_quality_not_observed");
@@ -1246,7 +1333,10 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
       ...dose,
       ...(adoptedBefore
         ? { comparable: false, non_comparable_reasons: ["adopted_after_log", ...verdict.non_comparable_reasons] }
-        : verdict),
+        : dose.substituted_by
+          ? // Another variant's work: credit for the slot, never load evidence for either lift.
+            { comparable: false, non_comparable_reasons: [UNIT_SUBSTITUTE, ...verdict.non_comparable_reasons] }
+          : verdict),
     };
   });
 
@@ -1259,6 +1349,18 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     substituted,
     skipped,
     reordered,
+    // Only when a gym swap satisfied a slot, so every other outcome row is byte-identical.
+    ...(unitSubstitutions.length
+      ? {
+          unit_substitutions: unitSubstitutions.map((sub) => ({
+            planned: sub.planned,
+            logged: sub.logged,
+            unit: sub.unit,
+            kind: sub.kind,
+          })),
+        }
+      : {}),
+    ...(substitutedSlots.length ? { substituted_slots: substitutedSlots } : {}),
     // Only on an adopted card, so every other outcome row is byte-identical to before.
     ...(adoption
       ? {

@@ -7,7 +7,10 @@
 //
 //   1. Is a lighter week EARNED for the week that starts on the landing Monday?
 //      - `streak` / `fatigue`: the mesocycle reads `deload-due` (program-state.ts — the
-//        loaded-weeks evidence, never re-derived here);
+//        loaded-weeks evidence, never re-derived here). The fatigue arm's log witness is
+//        MOVEMENT UNITS, never lifts (two compound units on the plan slipping with nothing
+//        of their own to explain it, capability-consumers.ts fatigueWitnessUnits), and the
+//        premise below reads the very same mesocycle, so routing and landing apply one rule;
 //      - `scheduled`: the block's own deload week falls on the landing week and will
 //        really run (block-phase.ts, the ONE resolution: a push athlete with no loaded-weeks
 //        evidence runs it as intensification, so nothing lightens).

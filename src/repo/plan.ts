@@ -8,8 +8,15 @@ import {
   normalizedExerciseKey,
   resolveExerciseName,
 } from "./exercise-canon.js";
-import { findOrCreateExercise, getExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
+import {
+  findExercise,
+  findOrCreateExercise,
+  getExercise,
+  recentWorkingSeconds,
+  recentWorkingWeight,
+} from "./exercises.js";
 import { relatedLiftStart } from "./related-lift.js";
+import { enteringVariantStart } from "./variant-start.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO, localDayOfStamp } from "./shared.js";
 import { memoNeutralWrite } from "./request-memo.js";
@@ -1713,6 +1720,10 @@ export function applyPlanChange(
 //   1. an incoming target that was supplied and survived the clamp,
 //   2. the incoming movement's OWN recent working history (never the outgoing
 //      lift's load — that never transfers),
+//   2b. with no history of its own (or only a stale one and a learned ratio), the
+//      movement UNIT's start (variant-start.ts): a current sibling's working load
+//      across a learned or table ratio, under NEW_VARIANT_START_FACTOR, rounded down
+//      to the lift's step — stored, the slot stamped untested,
 //   3. a conservative starting idea from a RELATED lift the athlete does train
 //      (see related-lift.ts), phrased as an idea rather than a settled number,
 //   4. the baseline-establishing "start light, log your actual working value."
@@ -1721,6 +1732,7 @@ export function applyPlanChange(
 type SwapGrounding =
   | { kind: "direct"; label: string }
   | { kind: "related"; label: string; source: string }
+  | { kind: "unit"; label: string; source: string }
   | null;
 
 const GROUNDED_START_NOTES: readonly [(lead: string, load: string) => string, ...((lead: string, load: string) => string)[]] = [
@@ -1741,6 +1753,20 @@ const RELATED_START_NOTES: readonly [
     `${lead} — untested so far; going off your ${source}, somewhere around ${load} is a fair start. Log what it really is.`,
 ];
 
+// Tier 2b: a STORED first target from the movement unit (variant-start.ts) — a sibling
+// variant's current working load read across a ratio, under a caution factor, rounded down.
+const UNIT_START_NOTES: readonly [
+  (lead: string, source: string, load: string) => string,
+  ...((lead: string, source: string, load: string) => string)[],
+] = [
+  (lead, source, load) =>
+    `${lead} — new to you, so it starts a little under what your ${source} suggests, at ${load}. Log what you actually lift.`,
+  (lead, source, load) =>
+    `${lead} — your ${source} puts a comfortable first session at ${load}; the log takes it from there.`,
+  (lead, source, load) =>
+    `${lead} — starting on the light side of your ${source}, at ${load}, so the first session is about the groove.`,
+];
+
 function swapLoadLabel(weight: number): string {
   return weight < 0 ? `${Math.abs(weight)} lb assist` : `${weight} lb`;
 }
@@ -1753,6 +1779,7 @@ function groundIncomingMovement(ex: {
   name: string;
   mode?: string | null;
   constraint_note?: string | null;
+  muscle_group?: string | null;
 }): { target_weight: number | null; target_seconds: number | null; grounding: SwapGrounding } {
   const none = { target_weight: null, target_seconds: null, grounding: null };
   if (constraintLimitsLoad(ex.constraint_note)) return none;
@@ -1769,6 +1796,19 @@ function groundIncomingMovement(ex: {
     };
   }
   const ownWeight = recentWorkingWeight(ex.name);
+  // TIER 2b, THE UNIT (variant-start.ts). No history of its own (or only a stale one with a
+  // learned ratio on record): a sibling variant's current working load across the unit's
+  // ratio, a caution factor under it, rounded down to the lift's step — STORED, unlike the
+  // related-lift idea below, because the slot is stamped untested by the write (nothing
+  // judges it until lifted) and the engine's plan-ahead rule re-grounds a high guess down
+  // to what the log shows. No ratio: the tiers below answer exactly as before.
+  const unitStart = enteringVariantStart(ex.name, ex.muscle_group ?? null, ownWeight);
+  if (unitStart)
+    return {
+      target_weight: unitStart.weight,
+      target_seconds: null,
+      grounding: { kind: "unit", label: swapLoadLabel(unitStart.weight), source: unitStart.source },
+    };
   if (ownWeight != null)
     return {
       target_weight: ownWeight,
@@ -1813,6 +1853,8 @@ function movementStartNote(
     return pickDayVariant(GROUNDED_START_NOTES, date, key("movement_grounded"))(lead, grounding.label);
   if (grounding?.kind === "related")
     return pickDayVariant(RELATED_START_NOTES, date, key("movement_related"))(lead, grounding.source, grounding.label);
+  if (grounding?.kind === "unit")
+    return pickDayVariant(UNIT_START_NOTES, date, key("movement_unit"))(lead, grounding.source, grounding.label);
   return `${lead}${hasStoredPrescription ? "." : " — start light, log your actual working value."}`;
 }
 
@@ -2286,6 +2328,70 @@ export function deletePlanDay(
   return { deleted: r.changes, day_number };
 }
 
+// ---- a lift entering the plan through a redraw ----
+// The swap/append path grounds an incoming movement through its tiers (tier 2b: the
+// movement UNIT, variant-start.ts). A drafted week (`replacePlan(..., {by:"restructure"})`)
+// used to write a lift new to the plan with whatever load the draft carried — usually
+// none, so its first card had no stored number at all. Now such a lift starts from its
+// unit, exactly as tier 2b does: a current sibling variant's working load across a
+// learned or table ratio, under NEW_VARIANT_START_FACTOR, rounded down to the lift's
+// step. Only when ALL hold:
+//   - the lift is NEW to the plan (no slot on any day of the plan being replaced);
+//   - it has no history of its own (recentWorkingWeight is null);
+//   - the author wrote no load (target_weight and target_seconds absent): a number the
+//     agent or a person wrote is never overwritten;
+//   - reps work with no load-limiting constraint note.
+// The slot is new to its day, so the ordinary write stamps it now (stampForWrite with no
+// prior row) — untested until lifted, exactly like a swap — and the engine's plan-ahead
+// rule re-grounds a high guess down to the log. The draft's own note stands; an item
+// without one gets the unit-start line. A person's save and an Undo never come here.
+function withRedrawEntryStarts<T extends { items: PlanItemInput[] }>(days: T[]): T[] {
+  let onPlan: Set<number>;
+  try {
+    onPlan = new Set(
+      (db.prepare(`SELECT DISTINCT exercise_id FROM plan_items WHERE exercise_id IS NOT NULL`).all() as any[]).map(
+        (row) => Number(row.exercise_id)
+      )
+    );
+  } catch {
+    return days; // a plan we cannot read grounds nothing
+  }
+  return days.map((day) => ({
+    ...day,
+    items: day.items.map((item) => {
+      try {
+        const start = redrawEntryStart(item, onPlan);
+        if (!start) return item;
+        const note = String(item.note ?? "").trim()
+          ? item.note
+          : movementStartNote("New in this plan", String(item.exercise), start.grounding, true).slice(0, 500);
+        return { ...item, target_weight: start.weight, note };
+      } catch {
+        return item; // a failed read is no number: the draft stands as written
+      }
+    }),
+  }));
+}
+
+function redrawEntryStart(
+  item: PlanItemInput,
+  onPlan: ReadonlySet<number>
+): { weight: number; grounding: SwapGrounding } | null {
+  const name = String(item.exercise ?? "").trim();
+  if (!name) return null;
+  if (item.target_weight != null || item.target_seconds != null) return null;
+  const stored = findExercise(name);
+  const mode = String(stored?.mode ?? item.mode ?? "reps");
+  if (mode === "timed") return null;
+  if (stored?.id != null && onPlan.has(Number(stored.id))) return null;
+  if (constraintLimitsLoad(stored?.constraint_note ?? null)) return null;
+  if (recentWorkingWeight(name) != null) return null;
+  const group = stored?.muscle_group == null ? null : String(stored.muscle_group);
+  const start = enteringVariantStart(name, group, null);
+  if (!start || !(start.weight > 0)) return null;
+  return { weight: start.weight, grounding: { kind: "unit", label: swapLoadLabel(start.weight), source: start.source } };
+}
+
 // Full restructure: make the plan exactly the given days (add/remove/rewrite).
 export function replacePlan(
   days: {
@@ -2302,7 +2408,10 @@ export function replacePlan(
   // rest day, a run day, an empty scaffold) is not written — see strengthDaysOnly.
   const strengthDays = strengthDaysOnly(days, { keepScaffolds: opts.keepScaffolds });
   const result = withSqliteSavepoint("replace_plan", () => {
-    const normalized = strengthDays;
+    // A drafted week (a redraw) grounds the lifts it brings in new from their unit, read
+    // against the plan as it stands BEFORE this write. Never on a person's save or an Undo.
+    const normalized =
+      opts.by === "restructure" && !opts.restoreStamps ? withRedrawEntryStarts(strengthDays) : strengthDays;
     const keep = new Set(normalized.map((d) => d.day_number));
     const existing = db.prepare(`SELECT day_number FROM plan_days`).all() as any[];
     for (const e of existing) {

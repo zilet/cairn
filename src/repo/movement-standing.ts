@@ -41,6 +41,9 @@ import {
 import { strengthObjectiveTrackedExercise } from "./strength-objective-carry.js";
 import { normalizedExerciseKey } from "./exercise-canon.js";
 import { exposureLighterOnPurpose } from "./whole-person-trajectory.js";
+// Read at call time only (program state -> strength-capability -> this module is a cycle).
+import { getProgramState } from "./program-state.js";
+import { unitOfLift } from "./capability-consumers.js";
 import { PLAN_ITEM_EFFECT_TIER, planItemEffectTier } from "../domain/training/plan-item-order.js";
 
 export type MovementKey = "squat" | "hinge" | "push" | "press" | "row" | "pull";
@@ -319,6 +322,13 @@ function directionOf(change: number | null): MovementStandingLine["direction"] {
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
+const DIRECTION_OF_VERDICT: Readonly<Record<string, MovementStandingLine["direction"]>> = {
+  climbing: "better",
+  holding: "holding",
+  slipping: "worse",
+  not_enough: null,
+};
+
 /** Where each movement stands as of `today`. */
 export function movementStanding(today?: string): MovementStanding {
   const d = today && /^\d{4}-\d{2}-\d{2}/.test(today) ? today.slice(0, 10) : localDateISO();
@@ -364,6 +374,15 @@ export function movementStanding(today?: string): MovementStanding {
   } catch {
     // no goals read: the tier and the sets decide
   }
+  // The capability summary program state carries for this date (null when unavailable).
+  const capability = (() => {
+    try {
+      const cap = getProgramState(d).capability ?? null;
+      return cap?.available === true ? cap : null;
+    } catch {
+      return null;
+    }
+  })();
   const lines: MovementStandingLine[] = [];
   for (const movement of MOVEMENTS) {
     const members = [...(byMovement.get(movement.key)?.values() ?? [])];
@@ -399,8 +418,20 @@ export function movementStanding(today?: string): MovementStanding {
       weights += weight;
       compared++;
     }
-    const change = weights > 0 ? round3(weighted / weights) : null;
+    let change = weights > 0 ? round3(weighted / weights) : null;
     const read = leadRead as MemberRead | null;
+    // The DIRECTION is the capability read's (strength-capability.ts): the verdict of the
+    // movement unit the lead lift belongs to, so the Horizon row and the capability read
+    // can never disagree about one movement. The blended change stays as wording only, and
+    // only while it points the same way; otherwise no "up"/"down" is said. A unit the read
+    // could not place leaves this read's own direction standing.
+    let direction = directionOf(change);
+    const unit = lead ? unitOfLift(capability, lead.name) : null;
+    if (unit) {
+      const said = DIRECTION_OF_VERDICT[unit.verdict] ?? null;
+      if (said !== direction) change = null;
+      direction = said;
+    }
     lines.push({
       key: movement.key,
       label: movement.label,
@@ -409,7 +440,7 @@ export function movementStanding(today?: string): MovementStanding {
       now_reps: lead?.bodyweight ? (read?.nowReps ?? null) : null,
       now_added_lb: lead?.bodyweight && read?.nowAdded ? read.nowAdded.lb : null,
       now_added_reps: lead?.bodyweight && read?.nowAdded ? read.nowAdded.reps : null,
-      direction: directionOf(change),
+      direction,
       change,
       since: compared > 0 ? then : null,
       lifts_compared: compared,

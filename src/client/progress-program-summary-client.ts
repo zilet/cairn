@@ -293,12 +293,28 @@ function adaptationsHtml(adaptations: string[] | null | undefined, index: number
   </div>`;
 }
 
-// The Program read's header: one voice line ("Fifteen lifts, all climbing.") and at
-// most one fact; the lifts themselves are the rows below. null with no lifts.
+type HeroUnit = { in_plan?: unknown; verdict?: unknown; qualifiers?: unknown };
+
+// The Program read's header: one voice line and at most one fact. Counted per MOVEMENT on
+// the plan when the capability read rides along ("Six movements, four climbing."; a unit
+// holding or easing with nothing to explain it needs a look), else per lift ("Fifteen
+// lifts, all climbing."). null with nothing to count.
 function programHeroVoice(
   lifts: ReadonlyArray<{ status?: unknown }>,
-  countWord: (n: unknown, lead?: boolean) => string
+  countWord: (n: unknown, lead?: boolean) => string,
+  capability?: { available?: unknown; units?: unknown } | null
 ): { line: string; fact: string } | null {
+  const units = capability?.available === true && Array.isArray(capability.units) ? (capability.units as HeroUnit[]) : [];
+  const graded = units.filter((u) => u?.in_plan === true && u.verdict !== "not_enough");
+  if (graded.length) {
+    const m = graded.length;
+    const up = graded.filter((u) => u.verdict === "climbing").length;
+    const explained = (u: HeroUnit) => Array.isArray(u.qualifiers) && u.qualifiers.length > 0;
+    const look = graded.filter((u) => u.verdict !== "climbing" && !explained(u)).length;
+    const moved = `${countWord(m, true)} movement${m === 1 ? "" : "s"}`;
+    const say = up === m ? `${moved}, ${m === 1 ? "" : "all "}climbing.` : up ? `${moved}, ${countWord(up)} climbing.` : `${moved} tracked.`;
+    return { line: say, fact: look ? `${look} ${look === 1 ? "needs" : "need"} a look` : "" };
+  }
   const n = lifts.length;
   if (!n) return null;
   const good = lifts.filter((lift) => lift.status === "progressing").length;

@@ -28,7 +28,7 @@ beforeEach(() => {
 
 function envelope(overrides = {}) {
   return {
-    policy_version: "daily_decision_v8",
+    policy_version: "daily_decision_v9",
     input_fingerprint: "superset-fp",
     generated_at: "2031-01-01T00:00:00.000Z",
     date: DATE,

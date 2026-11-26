@@ -54,6 +54,7 @@ import { runEnergyDeficiencyWatch } from "./domain/brain/energy-deficiency-servi
 import { closePlanCoverageGap } from "./domain/brain/coverage-change.js";
 import { settleEarnedRecoveryWeek } from "./domain/brain/recovery-week-change.js";
 import { settleVolumeStep } from "./domain/brain/volume-step.js";
+import { settleUnitPlateau } from "./domain/brain/unit-plateau-change.js";
 import { routeTripVersions } from "./domain/today/brief-asks.js";
 import {
   MEAL_REFRESH_INSTRUCTION_KEY,
@@ -1116,6 +1117,12 @@ export function startScheduler() {
     // The volume step: one earned set on one group a week, never during a cut or beside
     // a recovery week (its own holds decide; volume-step.ts).
     const volumeStepDue = dailySlotDue(now, "volume_step_check_date");
+    // ---- the plateau ladder (unit-plateau-change.ts) ----
+    // One bounded lever a day for a movement that has stopped progressing: a higher rep
+    // range at the held load, or an accessory's rotation at a block boundary. Deterministic,
+    // no agent; its own holds decide, after the recovery week and the volume step.
+    const unitPlateauDue = dailySlotDue(now, "unit_plateau_check_date");
+    // ---- end plateau ladder ----
     // (h) "Behind you": one finished goal looked back on a night (gated on its rows).
     const goalReviewDue = goalReviewTickDue(now);
 
@@ -1135,7 +1142,8 @@ export function startScheduler() {
       !underfuelDue &&
       !deficitWatchDue &&
       !coverageCheckDue &&
-      !volumeStepDue
+      !volumeStepDue &&
+      !unitPlateauDue
     )
       return;
     proactiveBusy = true;
@@ -1400,6 +1408,17 @@ export function startScheduler() {
           return { outcome: result.status === "routed" ? "succeeded" : "no_op", value: result };
         });
       }
+      // ---- the plateau ladder (unit-plateau-change.ts): after the volume step ----
+      if (unitPlateauDue) {
+        await runScheduled("unit_plateau_check_date", localToday(now), "unit_plateau_check_date", () => {
+          const result = settleUnitPlateau({ date: localToday(now), act: true });
+          if (result.status === "routed")
+            log.info(`[proactive] a plateau lever (${result.lever ?? "?"}) was routed (${result.tier ?? "?"}).`);
+          const acted = result.status === "routed" || result.withdrawn.length > 0;
+          return { outcome: acted ? "succeeded" : "no_op", value: result };
+        });
+      }
+      // ---- end plateau ladder ----
       if (triggerCheckDue) {
         await runScheduled(
           "program_evolution_trigger_date",

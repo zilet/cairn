@@ -869,7 +869,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/strength-capability` | Strength progress per movement unit and per muscle group, the single lift as evidence. Directional words only, never a score; {available:false} when the read could not be made. |
+| GET | `/api/strength-capability` | Strength progress per movement unit and per muscle group, the single lift as evidence. Directional words only, never a score; each in-plan unit the plateau ladder covers carries its `next` lever (capability-ladder.ts); {available:false} when the read could not be made. |
 
 ## `/strength-journey`
 

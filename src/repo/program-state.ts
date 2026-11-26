@@ -85,6 +85,7 @@ import {
 } from "./endurance-sports.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
 import type { HrModel } from "./hr-model.js";
+import type { StrengthCapabilityRead } from "../contracts/strength-capability.js";
 import { personalRunReadForRow, usablePersonalHrModel } from "./run-intensity.js";
 import { isStatedEasyRpe } from "./stated-effort.js";
 import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "./training-fatigue.js";
@@ -93,6 +94,25 @@ import { recoverySignalIsDecisionGrade } from "./sensor-cadence.js";
 import { countComparableDoseShortfallSessions } from "./session-dose-log.js";
 import { isoDaysAgo } from "../lib/dates.js";
 import { copyDeep, copyFlat, memoKey, requestMemo } from "./request-memo.js";
+// Progress per movement unit and muscle. Called only at read time (never at module
+// load), so the strength-capability -> program-state import cycle is load-order safe.
+import { capabilityRead } from "./strength-capability.js";
+// The plateau ladder (unit-plateau.ts): the one answer to "which lever next" for a holding
+// movement. Read at call time only, inside the capability pass (see there).
+import { type UnitPlateauLadder, type UnitPlateauRung, unitPlateauLadder } from "./unit-plateau.js";
+import {
+  capabilityUsable,
+  everyUnitOnPlan,
+  FATIGUE_MIN_SLIPPING_UNITS,
+  fatigueWitnessUnits,
+  inPlanUnitCounts,
+  type ProgramCapability,
+  summarizeCapability,
+  UNAVAILABLE_CAPABILITY,
+  unitEvidenceLift,
+  unitExplained,
+  unitPhrase,
+} from "./capability-consumers.js";
 
 // ---- ACWR low-base guards ---------------------------------------------------
 // An acute-vs-chronic ratio is only meaningful once there's a real CHRONIC base
@@ -449,6 +469,14 @@ export interface ProgramState {
   hybrid: HybridState | null;
   headline: string; // one plain sentence, no score
   adaptations_due: string[]; // the plain-language "what to evolve next" list
+  /**
+   * The capability read (strength-capability.ts) for this date, summarized: progress per
+   * movement unit and muscle, the single lift as evidence. The headline's tally,
+   * `adaptations_due`, the deload's fatigue arm and every decision that once counted lifts
+   * read it. `available:false` when the read failed (those then fall back toward silence).
+   * Absent only on the partial state a capability read itself sees while it is computed.
+   */
+  capability?: ProgramCapability;
 }
 
 // ---- small deterministic helpers ----
@@ -1164,7 +1192,8 @@ function decisionGradeRecoveryDrifting(recovery: any): boolean {
 // (family_key — "Cable / Rope Pushdown") or a movement region (movement-region.ts — a rope
 // and a bar pushdown, a flat dumbbell and barbell bench) are the same stimulus, so they
 // are one witness; the grouping is transitive. A big compound with no region still folds
-// with its own family.
+// with its own family. The deload's fatigue arm counts movement units when the capability
+// read is in hand (logConfirmedFatigue) and falls back to this lift grouping when it is not.
 export function regressionWitnessCount(
   lifts: ReadonlyArray<Pick<LiftState, "exercise"> & Partial<Pick<LiftState, "family_key" | "muscle_group">>>
 ): number {
@@ -1191,28 +1220,69 @@ export function regressionWitnessCount(
   return new Set(lifts.map((_, i) => find(i))).size;
 }
 
-// Exported for the morning read (morning-dose.ts): a sustained HRV decline rests the day
-// only beside THIS shortfall — the same log-confirmed one the deload read uses.
-export function logConfirmedFatigue(
-  date: string,
-  lifts: LiftState[]
-): { high: boolean; reasons: string[] } {
-  // A resting lift is no witness (it is out of the rotation), and near-variants of one
-  // movement are ONE witness: two noisy pressdowns slipping together are one slide.
-  const regressing = (Array.isArray(lifts) ? lifts : []).filter(
+function shortfallSessionsOn(date: string): number {
+  try {
+    return countComparableDoseShortfallSessions(date, 14);
+  } catch {
+    return 0;
+  }
+}
+
+// The fatigue arm's movement evidence: slipping movement units when the capability read is
+// in hand, else the lift-level rule the units replaced — the regressing lifts he is doing
+// (never a resting one), near-variants folded into one witness (regressionWitnessCount).
+// A read that cannot be had must never switch protection off, so a failed or missing read
+// answers by lifts, not by silence. `null` is the one deliberate "no movement evidence":
+// the partial state a capability pass reads while it is itself being finished.
+type FatigueEvidence = { units: ProgramCapability } | { lifts: readonly LiftState[] } | null;
+
+function fatigueWitnessCount(evidence: FatigueEvidence): { count: number; byUnits: boolean } {
+  if (!evidence) return { count: 0, byUnits: true };
+  if ("units" in evidence) return { count: fatigueWitnessUnits(evidence.units).length, byUnits: true };
+  const regressing = (Array.isArray(evidence.lifts) ? evidence.lifts : []).filter(
     (lift) => lift?.status === "regressing" && lift?.resting !== true
   );
-  const witnesses = regressionWitnessCount(regressing);
-  let shortfallSessions = 0;
-  try {
-    shortfallSessions = countComparableDoseShortfallSessions(date, 14);
-  } catch {
-    shortfallSessions = 0;
-  }
+  return { count: regressionWitnessCount(regressing), byUnits: false };
+}
+
+function fatigueFromEvidence(evidence: FatigueEvidence, shortfallSessions: number): { high: boolean; reasons: string[] } {
   const reasons: string[] = [];
-  if (witnesses >= 2) reasons.push("a couple of lifts are drifting down");
+  const witnesses = fatigueWitnessCount(evidence);
+  if (witnesses.count >= FATIGUE_MIN_SLIPPING_UNITS)
+    reasons.push(witnesses.byUnits ? "a couple of your main movements are drifting down" : "a couple of lifts are drifting down");
   if (shortfallSessions >= 2) reasons.push("recent sessions came in short of what was prescribed");
   return { high: reasons.length > 0, reasons };
+}
+
+// The capability summary for a date, read through program state's own memo. Null when it
+// cannot be read (the lift rule then answers).
+function capabilityFor(date: string): ProgramCapability | null {
+  try {
+    return getProgramState(date).capability ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Exported for the morning read (morning-dose.ts): a sustained HRV decline rests the day
+// only beside THIS shortfall — the same log-confirmed one the deload read uses.
+//
+// The witnesses are MOVEMENT UNITS when the capability read is in hand (capability-
+// consumers.ts `fatigueWitnessUnits`): two or more compound units on the plan, each
+// slipping with no lighter week or (for the legs) run build to explain it — the cut does
+// not explain a slide away here. Variants of one movement are one unit; a resting lift
+// belongs to no in-plan unit. `capability` is the summary to judge (program state passes
+// its own); omitted, the date's own summary is read. When no usable summary is in hand
+// (the read failed, or is missing), `lifts` answer by the lift-level rule: two
+// independent regressing lifts he is doing.
+export function logConfirmedFatigue(
+  date: string,
+  lifts?: LiftState[] | null,
+  capability?: ProgramCapability | null
+): { high: boolean; reasons: string[] } {
+  const cap = capability === undefined ? capabilityFor(date) : capability;
+  const evidence: FatigueEvidence = capabilityUsable(cap) ? { units: cap } : { lifts: Array.isArray(lifts) ? lifts : [] };
+  return fatigueFromEvidence(evidence, shortfallSessionsOn(date));
 }
 
 // Athlete-facing mesocycle notes — variant SETS, rotated by calendar day. A
@@ -1327,13 +1397,29 @@ function appendSupportingFeel(note: string, reasons: string[], date: string): st
   return `${note} ${support}`;
 }
 
-function mesocycle(
+// Everything the mesocycle read MEASURES — the loaded-weeks streak, the reset, the tonnage
+// ACWR, physiology, the block — apart from the log-confirmed fatigue, which needs the
+// capability read (and the capability read needs program state). Measured once; decided
+// by `mesocycleDecide` with whatever fatigue evidence is in hand.
+interface MesoMeasure {
+  weeksSince: number | null;
+  loadedStreak: number;
+  acwr: number | null;
+  buildingBase: boolean;
+  recoveryDrifting: boolean;
+  recentHybridHeavy: boolean;
+  feedbackReasons: string[];
+  shortfallSessions: number;
+  blockSuppressesDeloadDue: boolean;
+  lastWeekTonnage: number;
+}
+
+function mesocycleMeasure(
   date: string,
   recovery?: any,
   recoveryWeek?: ActiveRecoveryWeek | null,
-  completedRecoveryWeek?: CompletedRecoveryWeekLedger | null,
-  lifts: LiftState[] = []
-): MesocycleState {
+  completedRecoveryWeek?: CompletedRecoveryWeekLedger | null
+): MesoMeasure {
   // A LIGHT week breaks the loaded streak. It is the detected reset (weeksSince)
   // only when it is ALSO under the existing 0.6× chronic detector — travel-light
   // weeks must not keep the streak alive, and they must not mint deload-due on
@@ -1409,12 +1495,6 @@ function mesocycle(
   const recoveryDrifting = decisionGradeRecoveryDrifting(rec);
   const feedbackFatigue = recentFeedbackFatigue(date);
   const recentHybridHeavy = recentEnduranceImpacts(7, date).some((i) => i.load === "heavy");
-  const logFatigue = logConfirmedFatigue(date, lifts);
-  // deload-due may come ONLY from a long loaded streak, or from a 4-week loaded
-  // streak plus log-confirmed fatigue plus physiology. Felt ratings never trigger.
-  const deloadDueByStreak = loadedStreak >= DELOAD_DUE_CONSECUTIVE_WEEKS;
-  const fatigueDeload =
-    loadedStreak >= FATIGUE_DELOAD_MIN_WEEKS && logFatigue.high && (recoveryDrifting || recentHybridHeavy);
 
   const block = (() => {
     try {
@@ -1453,6 +1533,41 @@ function mesocycle(
   const blockPhase = String(block?.phase ?? "");
   const blockSuppressesDeloadDue = freshBlock || blockPhase === "deload" || blockPhase === "realization";
 
+  return {
+    weeksSince,
+    loadedStreak,
+    acwr,
+    buildingBase,
+    recoveryDrifting,
+    recentHybridHeavy,
+    feedbackReasons: feedbackFatigue.reasons,
+    shortfallSessions: shortfallSessionsOn(date),
+    blockSuppressesDeloadDue,
+    lastWeekTonnage: weekLoadAt(1).tonnage,
+  };
+}
+
+// The mesocycle read, decided from its measurements and the fatigue arm's movement
+// evidence (FatigueEvidence: the capability summary, the lift rule when the read failed,
+// or null for the partial state a capability pass reads).
+function mesocycleDecide(
+  date: string,
+  m: MesoMeasure,
+  recoveryWeek: ActiveRecoveryWeek | null | undefined,
+  completedRecoveryWeek: CompletedRecoveryWeekLedger | null | undefined,
+  fatigueEvidence: FatigueEvidence
+): MesocycleState {
+  let weeksSince = m.weeksSince;
+  const { loadedStreak, acwr, buildingBase, recentHybridHeavy, blockSuppressesDeloadDue } = m;
+  const feedbackFatigue = { reasons: m.feedbackReasons };
+  // Movement units when the read is in hand, lifts when it failed (logConfirmedFatigue).
+  const logFatigue = fatigueFromEvidence(fatigueEvidence, m.shortfallSessions);
+  // deload-due may come ONLY from a long loaded streak, or from a 4-week loaded
+  // streak plus log-confirmed fatigue plus physiology. Felt ratings never trigger.
+  const deloadDueByStreak = loadedStreak >= DELOAD_DUE_CONSECUTIVE_WEEKS;
+  const fatigueDeload =
+    loadedStreak >= FATIGUE_DELOAD_MIN_WEEKS && logFatigue.high && (m.recoveryDrifting || recentHybridHeavy);
+
   let phase: MesoPhase;
   let note: string;
   if (recoveryWeek) {
@@ -1481,7 +1596,7 @@ function mesocycle(
       note = pickDayVariant(BUILDING_BASE_NOTE_VARIANTS, date, "meso-building-base");
     } else if (due && deloadDueByStreak) {
       phase = "deload-due";
-      const nonTonnageStreak = weekLoadAt(1).tonnage <= 0;
+      const nonTonnageStreak = m.lastWeekTonnage <= 0;
       note = appendSupportingFeel(
         pickDayVariant(
           nonTonnageStreak ? STREAK_DELOAD_NONTONNAGE_NOTE_VARIANTS : STREAK_DELOAD_NOTE_VARIANTS,
@@ -2001,11 +2116,97 @@ function hybridState(
 // and every slot is keyed to the wall-clock day it was read on, so a historical or
 // future date's state is never carried across midnight.
 // Registered for the test-isolate reset.
-const PROGRAM_STATE_SLOTS = 8;
+const PROGRAM_STATE_SLOTS = 12;
 const programStateCache = new Map<string, ProgramState>();
 registerTrainingCacheClear(() => {
   programStateCache.clear();
 });
+
+// THE CAPABILITY PASS. A program state is finished by the capability read for its date
+// (the headline's tally, `adaptations_due`, the deload's fatigue arm). That read itself
+// reads program state (its endurance and hybrid reads, and — through the race build, the
+// run engine, the cut and the block phase — program state for this and neighbouring
+// dates). So the read is handed this date's BASE state (everything but the capability's
+// own contribution), and while any capability pass is in flight every program state read
+// is a PARTIAL one: computed without a pass of its own, cached under its own key, never
+// served to a finished read. That keeps the recursion to one level (a pass never starts a
+// pass) and the base visible to the pass's own reads, without a finished read ever
+// returning a half-built state. A partial state differs from the finished one only in what
+// the capability decides: no `capability`, the lift-by-lift headline and adaptations, and
+// a deload fatigue arm with no movement witnesses.
+let capabilityPassDepth = 0;
+const stateFlavor = (): "full" | "partial" => (capabilityPassDepth > 0 ? "partial" : "full");
+
+/**
+ * The brain-snapshot signal key a request shares one date's program state under
+ * (`brainSignal(programStateSignalKey(d), () => getProgramState(d))`, coach.ts and
+ * day-read.ts). The snapshot spans the whole request, and `brainSignal` values are not
+ * keyed by anything but this string, so a state read while a capability pass is in flight
+ * — the PARTIAL one, with no capability and no movement evidence for the deload's fatigue
+ * arm — gets a key of its own and is never served to a finished reader later in the same
+ * request. (No path from the pass to those sites is known — the read asks cut, recovery,
+ * race and session reads, the ladder asks the progression engine, and neither imports
+ * coach.ts's context or day-read.ts — but nothing pins that, and a request-wide memo is
+ * the wrong place to depend on it.) The
+ * `:partial` suffix stays under the `program_state` prefix, so `invalidateBrainSnapshot`
+ * clears both.
+ */
+export function programStateSignalKey(date: string = localDateISO()): string {
+  const base = date === localDateISO() ? "program_state" : `program_state:${date}`;
+  return capabilityPassDepth > 0 ? `${base}:partial` : base;
+}
+
+/** Test seam: run `fn` as if a capability pass were in flight (every program state read inside is the partial one). */
+export function withinCapabilityPassForTest<T>(fn: () => T): T {
+  capabilityPassDepth++;
+  try {
+    return fn();
+  } finally {
+    capabilityPassDepth--;
+  }
+}
+
+// What each FINISHED state's pass computed — its capability read and, when a holding
+// movement asked for it, its plateau ladder — kept beside the state under the same key
+// (and dropped with it). A bare `capabilityRead(d)` asked after program state is served
+// the very read program state was finished with instead of computing it a second time
+// (strength-capability.ts), and today's card reads the ladder's effort lever from here
+// (today-set-quality.ts) rather than paying for a ladder of its own. Only an available
+// read is kept: a failed one is asked again, as the read's own memo never remembers one.
+const passCache = new Map<string, { read: StrengthCapabilityRead; ladder: UnitPlateauLadder | null }>();
+registerTrainingCacheClear(() => {
+  passCache.clear();
+});
+
+function finishedPass(date: string): { read: StrengthCapabilityRead; ladder: UnitPlateauLadder | null } | null {
+  if (capabilityPassDepth > 0) return null;
+  try {
+    getProgramState(date);
+    return passCache.get(programStateCacheKey(date, "full")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The capability read program state was finished with for `date`, or null (inside a pass,
+ * or when the pass's read was unavailable). Reads program state (memoized) so the pass has
+ * run; a copy every time.
+ */
+export function finishedCapabilityRead(date: string): StrengthCapabilityRead | null {
+  const hit = finishedPass(date);
+  return hit ? structuredClone(hit.read) : null;
+}
+
+/**
+ * The plateau ladder program state's pass computed for `date` over that same read, or
+ * null: inside a pass, a failed read or ladder, or no in-plan movement holding with nothing
+ * to explain it (`needsLadder` — the only units the ladder gives a lever to). A copy.
+ */
+export function finishedPlateauLadder(date: string): UnitPlateauLadder | null {
+  const hit = finishedPass(date);
+  return hit?.ladder ? structuredClone(hit.ladder) : null;
+}
 
 export function getProgramState(date?: string, recovery?: any): ProgramState {
   // Request-memoized over the process memo below for the bare form (one Today open asks
@@ -2016,7 +2217,7 @@ export function getProgramState(date?: string, recovery?: any): ProgramState {
     const d = date || localDateISO();
     if (typeof d === "string")
       return requestMemo(
-        `program_state:${d}:${localDateISO()}:${currentTrainingDataVersion()}`,
+        `program_state:${stateFlavor()}:${d}:${localDateISO()}:${currentTrainingDataVersion()}`,
         () => getProgramStateCached(d, undefined),
         copyDeep
       );
@@ -2024,24 +2225,98 @@ export function getProgramState(date?: string, recovery?: any): ProgramState {
   return getProgramStateCached(date, recovery);
 }
 
+function programStateCacheKey(d: string, flavor: "full" | "partial"): string {
+  const wallDay = localDateISO();
+  return `${flavor}|${d}|${wallDay === d ? "" : wallDay}|${currentTrainingDataVersion()}|${trainingBackstopSignature()}`;
+}
+
+function rememberProgramState(key: string, value: ProgramState): void {
+  programStateCache.delete(key);
+  programStateCache.set(key, value);
+  while (programStateCache.size > PROGRAM_STATE_SLOTS) {
+    const oldest = programStateCache.keys().next().value;
+    if (oldest === undefined) break;
+    programStateCache.delete(oldest);
+    passCache.delete(oldest);
+  }
+}
+
 function getProgramStateCached(date?: string, recovery?: any): ProgramState {
   const d = date || localDateISO();
-  const wallDay = localDateISO();
-  const key = `${d}|${wallDay === d ? "" : wallDay}|${currentTrainingDataVersion()}|${trainingBackstopSignature()}`;
+  const flavor = stateFlavor();
+  const key = programStateCacheKey(d, flavor);
   const hit = programStateCache.get(key);
   if (hit) {
     programStateCache.delete(key);
     programStateCache.set(key, hit);
     return structuredClone(hit);
   }
-  const value = computeProgramState(d, recovery);
-  programStateCache.set(key, value);
-  while (programStateCache.size > PROGRAM_STATE_SLOTS) {
-    const oldest = programStateCache.keys().next().value;
-    if (oldest === undefined) break;
-    programStateCache.delete(oldest);
+  const parts = computeProgramParts(d, recovery);
+  const base = assembleProgramState(parts, null);
+  if (flavor === "partial") {
+    rememberProgramState(key, base);
+    return structuredClone(base);
   }
+  // The pass's own reads of this date are served the base.
+  rememberProgramState(programStateCacheKey(d, "partial"), base);
+  const pass = capabilityPass(d, base);
+  const value = assembleProgramState(parts, pass.capability, pass.ladder);
+  rememberProgramState(key, value);
+  if (pass.read?.available) passCache.set(key, { read: pass.read, ladder: pass.ladder?.available ? pass.ladder : null });
+  else passCache.delete(key);
   return structuredClone(value);
+}
+
+// Does the plan carry any lift at all? With none, every unit he trains is his program
+// (everyUnitOnPlan). A read that fails answers yes: off-plan units then decide nothing.
+function planCarriesStrength(): boolean {
+  try {
+    return !!db
+      .prepare(
+        `SELECT 1 FROM plan_items WHERE exercise_id IS NOT NULL AND COALESCE(kind, 'strength') != 'cardio' LIMIT 1`
+      )
+      .get();
+  } catch {
+    return true;
+  }
+}
+
+// Does any in-plan movement hold with nothing to explain it? Only such a unit asks the
+// plateau ladder for its lever (unitCalls), so a program with none never pays for the read.
+function needsLadder(cap: ProgramCapability): boolean {
+  return cap.available === true && cap.units.some((u) => u.in_plan && u.verdict === "holding" && !unitExplained(u));
+}
+
+// The capability read for `d`, handed the base state, and — when a holding movement asks
+// for it — the plateau ladder over that same read. Both run INSIDE the pass, so every
+// program state they reach (the ladder asks the progression engine whether it is already
+// moving a plan lift, and the engine reads program state) is the partial one: the ladder
+// never starts a pass of its own, and the recursion stays one level deep. Any failure is an
+// unavailable read, and a ladder that fails is null: everything they would have decided
+// falls back toward silence.
+function capabilityPass(
+  d: string,
+  base: ProgramState
+): { capability: ProgramCapability; ladder: UnitPlateauLadder | null; read: StrengthCapabilityRead | null } {
+  capabilityPassDepth++;
+  try {
+    const read = capabilityRead(d, { programState: structuredClone(base) });
+    const summary = summarizeCapability(read);
+    const cap = planCarriesStrength() ? summary : everyUnitOnPlan(summary);
+    let ladder: UnitPlateauLadder | null = null;
+    if (read.available && needsLadder(cap)) {
+      try {
+        ladder = unitPlateauLadder(d, { capability: read });
+      } catch {
+        ladder = null;
+      }
+    }
+    return { capability: cap, ladder, read: read.available ? read : null };
+  } catch {
+    return { capability: { ...UNAVAILABLE_CAPABILITY, units: [], muscles: [] }, ladder: null, read: null };
+  } finally {
+    capabilityPassDepth--;
+  }
 }
 
 // The headline when lifts are on record but none was trained inside the current window:
@@ -2053,8 +2328,23 @@ export const NOTHING_CURRENT_HEADLINE_VARIANTS = [
   "Nothing current on the log — the read picks up as soon as training does.",
 ] as const;
 
-function computeProgramState(date?: string, recovery?: any): ProgramState {
-  const d = date || localDateISO();
+// Everything a program state is computed from, measured once. `assembleProgramState`
+// decides the rest — the deload, the headline, the adaptations — with or without the
+// capability read.
+interface ProgramParts {
+  d: string;
+  discipline: string;
+  lifts: LiftState[];
+  volume: MuscleVolumeState[];
+  recoveryWeek: ActiveRecoveryWeek | null;
+  completedRecoveryWeek: CompletedRecoveryWeekLedger | null;
+  measure: MesoMeasure;
+  endurance: EnduranceState | null;
+  hybrid: HybridState | null;
+  weekLayoutSuggestion: string | null;
+}
+
+function computeProgramParts(d: string, recovery?: any): ProgramParts {
   const discipline = getPrimaryDiscipline();
   const enduranceConfigured = getTrainingIntent().endurance_role !== "none";
   const lifts = liftStates(d);
@@ -2064,23 +2354,39 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   // finished overlay week (recovery-cycles.ts) — the overlay is how every recovery week
   // lands now, and an over-performed lighter week must not let the old streak stand.
   const completedRecoveryWeek = recoveryWeek ? null : latestCompletedRecoveryWeek(d);
-  const meso = mesocycle(d, recovery, recoveryWeek, completedRecoveryWeek, lifts);
+  const measure = mesocycleMeasure(d, recovery, recoveryWeek, completedRecoveryWeek);
   const endurance = enduranceConfigured ? enduranceState(d) : null;
-  const hybrid = hybridState(d, endurance, enduranceConfigured, meso);
+  // The hybrid read takes the mesocycle only for its tonnage ACWR, which the capability
+  // read never moves, so the base decision is the one it reads.
+  const hybrid = hybridState(
+    d,
+    endurance,
+    enduranceConfigured,
+    mesocycleDecide(d, measure, recoveryWeek, completedRecoveryWeek, null)
+  );
+  return {
+    d,
+    discipline,
+    lifts,
+    volume,
+    recoveryWeek,
+    completedRecoveryWeek,
+    measure,
+    endurance,
+    hybrid,
+    weekLayoutSuggestion: weekLayoutSuggestionOn(d),
+  };
+}
 
-  // The "what to evolve next" list — plain language, deduped, most actionable first.
-  const adaptations: string[] = [];
-  if (recoveryWeek)
-    adaptations.push("Continue the reduced recovery-week sessions; resume progression after the week has absorbed.");
-  // Only lifts in the rotation speak here: a resting lift (off the plan, not trained
-  // lately) is neither a stall to rotate nor a slide to back off, and it never counts
-  // in the headline's tally.
+// The headline's lift-by-lift tally and per-lift calls: what a program state says when no
+// capability read is in hand (a failed read, or the partial state a pass itself reads).
+// Only lifts in the rotation speak: a resting lift (off the plan, not trained lately) is
+// neither a stall to rotate nor a slide to back off.
+function liftByLiftCalls(lifts: LiftState[]): { lines: string[]; push: string[] } {
   const active = lifts.filter((l) => !l.resting);
-  const plateaued = active.filter((l) => l.status === "plateaued");
-  const progressing = active.filter((l) => l.status === "progressing");
-  const regressing = active.filter((l) => l.status === "regressing");
-  for (const l of plateaued) {
-    adaptations.push(
+  const lines: string[] = [];
+  for (const l of active.filter((x) => x.status === "plateaued")) {
+    lines.push(
       l.suggested_action === "vary"
         ? `Rotate a variation for ${l.exercise} — it's been flat${l.weeks_static ? ` ~${l.weeks_static} wk` : ""}.`
         : l.suggested_action === "deload"
@@ -2088,7 +2394,125 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
           : `Unstick ${l.exercise}: tighten technique / add a rep before chasing load.`
     );
   }
-  for (const l of regressing) adaptations.push(`Back off ${l.exercise} and let it rebuild.`);
+  for (const l of active.filter((x) => x.status === "regressing")) lines.push(`Back off ${l.exercise} and let it rebuild.`);
+  return { lines, push: active.filter((l) => l.status === "progressing").map((l) => l.exercise) };
+}
+
+/**
+ * `adaptations_due` per MOVEMENT UNIT (capability-consumers.ts): one entry per in-plan unit
+ * that needs a call, naming the unit and, as evidence, the lift on the plan. A climbing
+ * unit offers its plan lift to the push list. A unit holding or easing through the cut, a
+ * run build or a lighter week needs no call (holding strength in a deficit is the win;
+ * legs easing under a run build is the interference effect), so it says nothing here — its
+ * own line already says why. A slipping unit is always a call (back off). A HOLDING unit's
+ * lever is the plateau ladder's (unit-plateau.ts), never a second opinion from the lift's
+ * own stall tell, so the two can never disagree: a unit the ladder says `wait` for (too
+ * young, a fresh prescription, the engine already moving it, pain, a variation waiting
+ * for the next block…), or does not cover, or a ladder that could not be read, says
+ * nothing here; otherwise the entry names the ladder's lever. A resting lift or an
+ * off-plan unit never speaks.
+ */
+function unitCalls(
+  cap: ProgramCapability,
+  ladder: UnitPlateauLadder | null
+): { lines: string[]; push: string[] } {
+  const rungs = new Map<string, UnitPlateauRung>();
+  if (ladder?.available) for (const r of ladder.units) rungs.set(r.unit_key, r);
+  const lines: string[] = [];
+  const push: string[] = [];
+  for (const unit of cap.units) {
+    if (!unit.in_plan) continue;
+    const evidence = unitEvidenceLift(unit);
+    if (!evidence) continue;
+    if (unit.verdict === "climbing") {
+      push.push(evidence);
+      continue;
+    }
+    if ((unit.verdict !== "holding" && unit.verdict !== "slipping") || unitExplained(unit)) continue;
+    const phrase = unitPhrase(unit);
+    if (unit.verdict === "slipping") {
+      lines.push(`Back off your ${phrase} work and let it rebuild (${evidence}).`);
+      continue;
+    }
+    // Holding: the ladder's lever, or nothing.
+    const line = ladderCallLine(rungs.get(unit.key) ?? null, phrase, evidence);
+    if (line) lines.push(line);
+  }
+  return { lines, push };
+}
+
+/**
+ * The `adaptations_due` entry for a holding movement, worded from the plateau ladder's
+ * lever. Null for `none` / `wait` / no rung: the ladder has nothing to pull, so neither does
+ * this list. The lift named is the ladder's own plan lift (the one it judged), else the
+ * unit's evidence lift. Plain words, no numbers.
+ */
+export function ladderCallLine(rung: UnitPlateauRung | null, phrase: string, evidence: string): string | null {
+  if (!rung) return null;
+  const lift = rung.plan_lift?.exercise ?? evidence;
+  switch (rung.lever) {
+    case "rep_scheme":
+      return `Move your ${phrase} work up a rep range at the same weight — ${lift} has held one weight and one rep count for weeks.`;
+    case "set_quality":
+      return `Take your ${phrase} sets a little closer to failure before adding anything — the sets on ${lift} have been ending with plenty left.`;
+    case "volume":
+      return `Add one set to your ${phrase} work — ${lift} has stalled while its muscle sits under its usual weekly work.`;
+    case "variation":
+      return `Rotate a variation for your ${phrase} work — ${rung.candidate?.exercise ?? "a close variation"} in for ${lift}, which has stalled through the other levers.`;
+    default:
+      return null;
+  }
+}
+
+// The headline from the capability read: its overall line, then the in-plan units by
+// verdict ("On the plan: two climbing, one holding" in digits, as the tally always was).
+function capabilityHeadline(
+  cap: ProgramCapability,
+  hybridPart: string | null,
+  deloadDue: boolean,
+  lifts: LiftState[],
+  d: string
+): string {
+  const counts = inPlanUnitCounts(cap);
+  const unitParts: string[] = [];
+  if (counts.climbing) unitParts.push(`${counts.climbing} movement${counts.climbing === 1 ? "" : "s"} climbing`);
+  if (counts.holding) unitParts.push(`${counts.holding} holding`);
+  if (counts.slipping) unitParts.push(`${counts.slipping} slipping`);
+  const overall = cap.overall && cap.overall.verdict !== "not_enough" ? cap.overall.line : null;
+  const segments: string[] = [];
+  if (unitParts.length) segments.push(`On the plan: ${unitParts.join(", ")}`);
+  if (hybridPart) segments.push(segments.length ? hybridPart : hybridPart.charAt(0).toUpperCase() + hybridPart.slice(1));
+  let tally = segments.join("; ");
+  if (deloadDue) tally = tally ? `${tally}; a deload's about due` : "A deload's about due";
+  const sentence = tally ? `${tally}.` : "";
+  if (overall || unitParts.length) return [overall, sentence].filter(Boolean).join(" ");
+  if (sentence) return sentence;
+  return lifts.length
+    ? pickDayVariant(NOTHING_CURRENT_HEADLINE_VARIANTS, d, "program-nothing-current")
+    : "Not enough logged yet to read your program — keep training and it'll come into focus.";
+}
+
+function assembleProgramState(
+  parts: ProgramParts,
+  capability: ProgramCapability | null,
+  ladder: UnitPlateauLadder | null = null
+): ProgramState {
+  const { d, discipline, lifts, volume, recoveryWeek, completedRecoveryWeek, endurance, hybrid } = parts;
+  const cap = capabilityUsable(capability) ? capability : null;
+  // The fatigue arm's movement evidence. A FINISHED state whose capability read failed
+  // (`capability` present, unavailable) answers by the lift rule — a thrown read never
+  // switches protection off. Only the partial state a pass reads (`capability` null) has
+  // none: it is never served to a finished reader.
+  const fatigueEvidence: FatigueEvidence = cap ? { units: cap } : capability ? { lifts } : null;
+  const meso = mesocycleDecide(d, parts.measure, recoveryWeek, completedRecoveryWeek, fatigueEvidence);
+
+  // The "what to evolve next" list — plain language, deduped, most actionable first.
+  const adaptations: string[] = [];
+  if (recoveryWeek)
+    adaptations.push("Continue the reduced recovery-week sessions; resume progression after the week has absorbed.");
+  // Per movement unit when the capability read is in hand; lift by lift otherwise.
+  const calls = cap ? unitCalls(cap, ladder) : liftByLiftCalls(lifts);
+  adaptations.push(...calls.lines);
   if (meso.phase === "deload-due") adaptations.push(meso.note);
   if (
     endurance &&
@@ -2104,15 +2528,67 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   // the same week, "which lane yields" is the shape of the week, and the individual
   // load steps are decided inside that shape.
   if (hybrid?.combined_load) adaptations.push(hybrid.combined_load.why);
-  // The other week-shape question, beside "which lane yields": do the two lanes' big
-  // days sit on top of each other? At most ONE line, only when the week genuinely
-  // collides, and it moves nothing — the athlete owns the shape of their week.
-  // Template space only, and only for an athlete with NO lifting week: with a stated
-  // week the honest read is on the calendar, and the weekday map lives in
-  // plan-selection, which this module cannot import (plan-selection → progression →
-  // here). The coach context, the Plan strip and the race build all carry the
-  // calendar read for that athlete; this line stays quiet rather than say a ring
-  // sentence beside a calendar one.
+  if (parts.weekLayoutSuggestion) adaptations.push(parts.weekLayoutSuggestion);
+  if (hybrid?.fuel?.risk === "high") adaptations.push(hybrid.fuel.why);
+  if (calls.push.length && !recoveryWeek) adaptations.push(`Push the next load step on ${calls.push.slice(0, 3).join(", ")}.`);
+
+  // Headline — one calm sentence, no score.
+  const hybridPart =
+    hybrid?.status === "shift-legs"
+      ? "legs absorbing endurance"
+      : hybrid?.status === "fuel-protect"
+        ? "fuel/recovery is the limiter"
+        : null;
+  const headline = recoveryWeek
+    ? "Recovery week is active — keep the training rhythm and let the reduced dose absorb."
+    : cap
+      ? capabilityHeadline(cap, hybridPart, meso.phase === "deload-due", lifts, d)
+      : liftByLiftHeadline(lifts, hybridPart, meso.phase === "deload-due", d);
+
+  return {
+    generated_for: d,
+    discipline,
+    lifts,
+    volume,
+    mesocycle: meso,
+    recovery_week: recoveryWeek,
+    endurance,
+    hybrid,
+    headline,
+    adaptations_due: adaptations,
+    ...(capability ? { capability } : {}),
+  };
+}
+
+function liftByLiftHeadline(lifts: LiftState[], hybridPart: string | null, deloadDue: boolean, d: string): string {
+  const active = lifts.filter((l) => !l.resting);
+  const progressing = active.filter((l) => l.status === "progressing").length;
+  const plateaued = active.filter((l) => l.status === "plateaued").length;
+  const regressing = active.filter((l) => l.status === "regressing").length;
+  const parts: string[] = [];
+  if (progressing) parts.push(`${progressing} lift${progressing === 1 ? "" : "s"} climbing`);
+  if (plateaued) parts.push(`${plateaued} stalled`);
+  if (regressing) parts.push(`${regressing} slipping`);
+  if (hybridPart) parts.push(hybridPart);
+  return parts.length
+    ? `${parts.join(", ")}${deloadDue ? "; a deload's about due" : ""}.`
+    : active.some((l) => liftTrainedRecently(l, d) || l.status !== "new")
+      ? "Everything's holding steady — room for a deliberate push."
+      : lifts.length
+        ? pickDayVariant(NOTHING_CURRENT_HEADLINE_VARIANTS, d, "program-nothing-current")
+        : "Not enough logged yet to read your program — keep training and it'll come into focus.";
+}
+
+// The other week-shape question, beside "which lane yields": do the two lanes' big
+// days sit on top of each other? At most ONE line, only when the week genuinely
+// collides, and it moves nothing — the athlete owns the shape of their week.
+// Template space only, and only for an athlete with NO lifting week: with a stated
+// week the honest read is on the calendar, and the weekday map lives in
+// plan-selection, which this module cannot import (plan-selection → progression →
+// here). The coach context, the Plan strip and the race build all carry the
+// calendar read for that athlete; this line stays quiet rather than say a ring
+// sentence beside a calendar one.
+function weekLayoutSuggestionOn(d: string): string | null {
   const weekLayout = (() => {
     try {
       const lifting = strengthScheduleRead(d);
@@ -2143,43 +2619,5 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
       return null;
     }
   })();
-  if (weekLayout && !weekLayout.clean && weekLayout.suggestion) adaptations.push(weekLayout.suggestion);
-  if (hybrid?.fuel?.risk === "high") adaptations.push(hybrid.fuel.why);
-  if (progressing.length && !recoveryWeek)
-    adaptations.push(
-      `Push the next load step on ${progressing
-        .slice(0, 3)
-        .map((l) => l.exercise)
-        .join(", ")}.`
-    );
-
-  // Headline — one calm sentence, no score.
-  const parts: string[] = [];
-  if (progressing.length) parts.push(`${progressing.length} lift${progressing.length === 1 ? "" : "s"} climbing`);
-  if (plateaued.length) parts.push(`${plateaued.length} stalled`);
-  if (regressing.length) parts.push(`${regressing.length} slipping`);
-  if (hybrid?.status === "shift-legs") parts.push("legs absorbing endurance");
-  else if (hybrid?.status === "fuel-protect") parts.push("fuel/recovery is the limiter");
-  const headline = recoveryWeek
-    ? "Recovery week is active — keep the training rhythm and let the reduced dose absorb."
-    : parts.length
-      ? `${parts.join(", ")}${meso.phase === "deload-due" ? "; a deload's about due" : ""}.`
-      : active.some((l) => liftTrainedRecently(l, d) || l.status !== "new")
-        ? "Everything's holding steady — room for a deliberate push."
-        : lifts.length
-          ? pickDayVariant(NOTHING_CURRENT_HEADLINE_VARIANTS, d, "program-nothing-current")
-          : "Not enough logged yet to read your program — keep training and it'll come into focus.";
-
-  return {
-    generated_for: d,
-    discipline,
-    lifts,
-    volume,
-    mesocycle: meso,
-    recovery_week: recoveryWeek,
-    endurance,
-    hybrid,
-    headline,
-    adaptations_due: adaptations,
-  };
+  return weekLayout && !weekLayout.clean && weekLayout.suggestion ? weekLayout.suggestion : null;
 }

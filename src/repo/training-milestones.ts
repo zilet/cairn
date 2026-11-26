@@ -12,6 +12,7 @@ import { getProgramState, type LiftState, type ProgramState } from "./program-st
 import { enduranceTestsDue } from "./run-progression.js";
 import { clipText, localDateISO } from "./shared.js";
 import { round5 } from "../lib/numbers.js";
+import { liftCallStands } from "./capability-consumers.js";
 
 export interface StrengthMilestoneInput {
   key: string;
@@ -196,7 +197,16 @@ export function refreshTrainingBenchmarkAttention(
   const out: AttentionScheduleEntry[] = [];
   // A resting lift (off the plan, not trained lately) is out of the rotation: it holds no
   // benchmark checkpoint and never re-activates the test week.
-  const lifts = (Array.isArray(ps.lifts) ? ps.lifts : []).filter((l) => l.resting !== true);
+  // The movement decides, the lift is evidence (capability-consumers.ts liftCallStands): a
+  // stalled variant inside a climbing unit, or a unit holding through the cut or a run
+  // build, is not a plateau to re-test, so it reads as a steady lift here.
+  const lifts = (Array.isArray(ps.lifts) ? ps.lifts : [])
+    .filter((l) => l.resting !== true)
+    .map((l) =>
+      (l.status === "plateaued" || l.status === "regressing") && !liftCallStands(ps.capability ?? null, l.exercise)
+        ? { ...l, status: "maintaining" as const }
+        : l
+    );
   for (const lift of lifts.filter((l) => l.sessions >= 3).slice(0, 12)) {
     out.push(
       applyAttentionObservation({

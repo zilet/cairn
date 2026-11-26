@@ -20,10 +20,17 @@
 // 1. UNITS. A compound lift's unit is its movement pattern (classifyPattern), the
 //    horizontal push split by press slot the way movement regions split it (a slotless
 //    horizontal push, a machine chest press or a push-up, presses flat). An isolation
-//    lift's unit is its movement region (all pushdowns are one unit), falling back to its
-//    pattern. Compound or not is movement-standing's `isCompoundLift`. Names resolve
-//    through `resolveExerciseName`, never raw. A lift with no pattern and no region forms
-//    no unit and is absent, never guessed.
+//    lift's unit is its movement region (all pushdowns are one unit): the curated table
+//    first, then the progress-only families (capability-region.ts: tibialis, hip
+//    abduction and adduction, front raise, upright row, shrug, straight-arm pulldown,
+//    chest fly, hip thrust, glute kickback, back extension, carry, four core families),
+//    then the agent's profile, falling back to ONE catch-all per pattern, labelled in
+//    plain words ("Other triceps work"). A catch-all of fewer than CATCH_ALL_MIN_LIFTS
+//    lifts beside a named unit of its pattern is not listed (its sets still count for the
+//    muscle). Compound or not is movement-standing's `isCompoundLift`, except that a
+//    "raise" only a group hint files is never a compound. Names resolve through
+//    `resolveExerciseName`, never raw. A lift with no pattern and no region forms no unit
+//    and is absent, never guessed.
 // 2. SERIES. Per variant, one exposure per comparable session
 //    (`sessionCountsTowardLiftTrajectory`): the best Epley of the session. Bodyweight work
 //    (pull-ups, dips, assisted work) reads on effective load, bodyweight plus added load
@@ -38,19 +45,25 @@
 //    from a sibling (variant-transfer.ts), else nothing: the variant contributes nothing
 //    yet and the unit carries on from its other contributors.
 // 4. VERDICT. The unit's change is the mean of its contributors' changes weighted by
-//    recent hard sets times lead tier. Slipping needs the decline on at least two honest
-//    (never lighter-on-purpose) exposures in the current window; otherwise it holds.
+//    recent hard sets times lead tier. Evidence is counted in SESSIONS across the
+//    contributors carrying a change: fewer than UNIT_MIN_SESSIONS is not enough yet;
+//    slipping needs the decline on SLIPPING_MIN_EXPOSURES honest sessions and at least
+//    SLIPPING_MIN_WINDOW_SESSIONS honest sessions in the current window; otherwise it holds.
 // 5. MUSCLES. Weekly hard sets per canonical group (`effectiveVolumeByGroup`, counted
 //    shares, so a band can never be read off touched shares), banded against
-//    MUSCLE_LANDMARKS with program-state's trend rule; direction is the mean of the unit
-//    verdicts crediting the group (primary or counted share; a touched share never votes),
-//    weighted by share times hard sets.
+//    MUSCLE_LANDMARKS with program-state's trend rule. Direction: the unit verdicts
+//    crediting the group (primary or counted share; a touched share never votes; a unit
+//    never credits a group in UNIT_NEVER_CREDITS, so a tibialis raise is no calf work),
+//    weighted by share times hard sets, AND the main unit (the most of that work) must
+//    agree; slipping also needs slipping units carrying MUSCLE_SLIPPING_MIN_WORK_SHARE.
 // 6. OVERALL over the compound units on the plan now.
 //
 // Memoized per request on the date, the wall day and the training-data version, the way
-// program state is. Any read that throws makes the whole read `available:false`, or the
-// one unit `not_enough`: a direction is never fabricated.
+// program state is; inside one call, the calendar's lighter days and the carded sessions
+// are each read once, never once per lift. Any read that throws makes the whole read
+// `available:false`, or the one unit `not_enough`: a direction is never fabricated.
 import { db } from "../db.js";
+import { runWithBrainSnapshot } from "../brain/snapshot.js";
 import { finite, plausibleRir } from "../lib/numbers.js";
 import type {
   CapabilityContributor,
@@ -80,19 +93,26 @@ import { classifyPattern, effectiveVolumeByGroup, type VolumeSet } from "./exerc
 import { sessionCountsTowardLiftTrajectory } from "./lift-comparability.js";
 import { isCompoundLift, type LiftLeadTier, liftLeadTier } from "./movement-standing.js";
 import { movementRegionKey } from "./movement-region.js";
+import { progressRegionKey } from "./capability-region.js";
 import { isCountedShare, muscleCreditsShared } from "./muscle-credit.js";
 import { athleteBodyweightLb } from "./performance.js";
 import { getEnduranceGoal } from "./profile.js";
-import { getProgramState, LIFT_CURRENT_WINDOW_DAYS, type ProgramState } from "./program-state.js";
+import {
+  finishedCapabilityRead,
+  getProgramState,
+  LIFT_CURRENT_WINDOW_DAYS,
+  type ProgramState,
+} from "./program-state.js";
 import { raceBuild } from "./race-build.js";
 import { finishedRacesBetween, raceRecoverySpan } from "./race-recovery.js";
 import { activeRecoveryWeek } from "./recovery-week.js";
+import { activeRecoveryWeekLedger, completedRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { capacityEnvelopeAsOf, type StrengthExposure } from "./strength-objectives.js";
 import { currentTrainingDataVersion } from "./training-cache.js";
 import { variantTransfer } from "./variant-transfer.js";
-import { exposureLighterOnPurpose } from "./whole-person-trajectory.js";
+import { exposureLighterOnPurpose, lighterOnPurposeReader } from "./whole-person-trajectory.js";
 import { MIN_WORKING_REPS, sessionWorkingLoad } from "./working-load.js";
 
 // ---------- the knobs ----------
@@ -107,8 +127,25 @@ export const CAPABILITY_WINDOW_DAYS = 28;
 // binding breaks a load order (test/moduleLoadOrder.test.js).
 export const CAPABILITY_CLIMBING_CHANGE = 0.01;
 export const CAPABILITY_SLIPPING_CHANGE = -0.015;
-/** A slide is said only when at least this many honest exposures in the current window sit below the earlier value. */
+/**
+ * A slide is said only when at least this many honest SESSIONS in the current window sit
+ * below the earlier value (counted once per session, however many of the unit's variants
+ * were trained in it).
+ */
 export const SLIPPING_MIN_EXPOSURES = 2;
+/**
+ * ...and only when the unit (or the variant) was trained in at least this many honest,
+ * comparable sessions inside the current window. Session-to-session noise in an estimated
+ * max runs a few percent, so two sessions cannot tell a slide from a bad day: a unit with
+ * two or fewer never reads slipping (it holds).
+ */
+export const SLIPPING_MIN_WINDOW_SESSIONS = 3;
+/**
+ * Any verdict at all needs at least this many honest, comparable sessions across the
+ * contributors that carry a change. Fewer is "not enough yet", never a direction: one
+ * session then and one now is two data points, not a trend.
+ */
+export const UNIT_MIN_SESSIONS = 3;
 /** The own-history fallback (last three against first three) needs this many exposures. */
 export const FALLBACK_MIN_EXPOSURES = 4;
 /** A hard set sits at this fraction of the session's working load or above. */
@@ -176,31 +213,99 @@ const UNIT_PHRASE: Readonly<Record<string, string>> = {
   "triceps:extension": "triceps extension",
   "lateral-raise": "lateral raise",
   "rear-delt": "rear-delt",
-  "horizontal-push:accessory": "chest fly",
-  "vertical-pull:accessory": "straight-arm pull",
-  "hip-extension:accessory": "hip thrust",
+  // The progress-only regions (capability-region.ts).
+  tibialis: "tibialis raise",
+  "hip-adduction": "hip adduction",
+  "hip-abduction": "hip abduction",
+  "front-raise": "front raise",
+  "upright-row": "upright row",
+  shrug: "shrug",
+  "straight-arm-pull": "straight-arm pulldown",
+  "chest-fly": "chest fly",
+  "hip-thrust": "hip thrust",
+  "glute-kickback": "glute kickback",
+  "back-extension": "back extension",
+  "core:lateral": "side core",
+  "core:rotation": "core rotation",
+  "core:anti-extension": "core bracing",
+  "core:flexion": "crunch and leg raise",
 };
 
-function unitPhrase(key: string): string {
+// A catch-all unit (`<pattern>:accessory`: lifts of one pattern no region table names)
+// is labelled by what it trains, in plain words: "Other triceps work" beside a named
+// triceps unit, "Triceps work" alone. Never "<Pattern> accessory".
+const CATCH_ALL_NOUN: Readonly<Record<string, string>> = {
+  squat: "leg",
+  hinge: "hinge",
+  lunge: "single-leg",
+  "hip-extension": "glute",
+  "horizontal-push": "chest",
+  "vertical-push": "shoulder",
+  "horizontal-pull": "upper-back",
+  "vertical-pull": "lat",
+  calf: "calf",
+  core: "core",
+  carry: "carry",
+  curl: "arm curl",
+  triceps: "triceps",
+  "lateral-raise": "shoulder raise",
+  "rear-delt": "rear-delt",
+  shrug: "shrug",
+  tibialis: "shin",
+  abduction: "hip",
+};
+
+/**
+ * A catch-all holding fewer lifts than this, beside a named unit of its own pattern, is
+ * not listed as a unit (one leftover lift is not a movement read); its hard sets still
+ * count toward the muscle's weekly sets.
+ */
+export const CATCH_ALL_MIN_LIFTS = 2;
+
+const CATCH_ALL_SUFFIX = ":accessory";
+
+function catchAllPattern(key: string): string | null {
+  return key.endsWith(CATCH_ALL_SUFFIX) ? key.slice(0, -CATCH_ALL_SUFFIX.length) : null;
+}
+
+function unitPhrase(key: string, besideNamed = false): string {
   const known = UNIT_PHRASE[key];
   if (known) return known;
-  return key
-    .replace(/:accessory$/, " accessory")
-    .replace(/[:-]+/g, " ")
-    .trim();
+  const pattern = catchAllPattern(key);
+  if (pattern) {
+    const noun = CATCH_ALL_NOUN[pattern] ?? pattern.replace(/[:-]+/g, " ");
+    return besideNamed ? `other ${noun}` : noun;
+  }
+  return key.replace(/[:-]+/g, " ").trim();
+}
+
+function unitLabel(key: string, besideNamed = false): string {
+  const phrase = unitPhrase(key, besideNamed);
+  return capitalize(catchAllPattern(key) && !UNIT_PHRASE[key] ? `${phrase} work` : phrase);
 }
 
 const capitalize = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 const PRESS_SLOT = /^horizontal-press:(flat|incline|decline)$/;
+// A "raise" no name rule files is never a compound, whatever the group hint says: a
+// cable Y raise filed under shoulders is not an overhead press.
+const RAISE_WORD = /\braises?\b/i;
 
 /** The unit a lift belongs to, or null when it has no pattern and no region. */
 export function capabilityUnitOf(name: string, group: string | null): UnitIdentity | null {
-  // A progress read: where the curated tables say nothing, the agent-filled profile may
-  // (exercise-profile.ts); today's card never takes that fill.
-  const region = movementRegionKey(name, group, { profile: true });
+  // Authority: the curated region table, then the progress-only families
+  // (capability-region.ts), then (for a compound) the pattern, and only where the tables
+  // say nothing the agent-filled profile (exercise-profile.ts). Today's card never takes
+  // the progress families or the profile fill.
+  const curated = movementRegionKey(name, group);
+  if (!curated) {
+    const family = progressRegionKey(name);
+    if (family) return { key: family, kind: "region", compound: false };
+  }
+  const region = curated ?? movementRegionKey(name, group, { profile: true });
   const pattern = classifyPattern(name, group ?? undefined, { profile: true });
-  if (isCompoundLift(name, group)) {
+  const raiseByGroupOnly = RAISE_WORD.test(name) && !classifyPattern(name);
+  if (!raiseByGroupOnly && isCompoundLift(name, group)) {
     if (pattern === "horizontal-push" || (region && PRESS_SLOT.test(region))) {
       const slot = region ? PRESS_SLOT.exec(region)?.[1] : null;
       return { key: `horizontal-push:${slot ?? "flat"}`, kind: "pattern", compound: true };
@@ -210,7 +315,7 @@ export function capabilityUnitOf(name: string, group: string | null): UnitIdenti
     return null;
   }
   if (region) return { key: region, kind: "region", compound: false };
-  if (pattern) return { key: `${pattern}:accessory`, kind: "pattern", compound: false };
+  if (pattern) return { key: `${pattern}${CATCH_ALL_SUFFIX}`, kind: "pattern", compound: false };
   return null;
 }
 
@@ -248,6 +353,8 @@ type Variant = {
   hardNow: number;
   hardPrev: number;
   inPlan: boolean;
+  /** Its movement pattern (classifyPattern), for the catch-all rule. */
+  pattern: string | null;
 };
 
 type VariantRead = {
@@ -255,10 +362,14 @@ type VariantRead = {
   /** The earlier value the change is read against (own, or transferred). */
   reference: number | null;
   transfer: CapabilityContributor["transfer"];
-  /** Honest exposures in the current window at or below the slipping line. */
-  declines: number;
+  /** Sessions whose honest exposure in the current window sits at or below the slipping line. */
+  declines: number[];
   direction: CapabilityVerdict;
 };
+
+// How much evidence a verdict stands on: honest comparable sessions in the read, the ones
+// in the current window, and the current-window sessions below the slipping line.
+type Evidence = { sessions: number; sessionsNow: number; declines: number };
 
 type ReadContext = {
   date: string;
@@ -310,7 +421,9 @@ function readRows(from: string, to: string): CapSet[] {
 // unit on the plan and inside the overall read.
 type PlanIndex = { ids: Set<number>; keys: Set<string>; families: Set<string>; units: Set<string> };
 
-function planIndex(): PlanIndex {
+type Resolve = (name: string) => ReturnType<typeof resolveExerciseName>;
+
+function planIndex(resolve: Resolve = resolveExerciseName): PlanIndex {
   const index: PlanIndex = { ids: new Set(), keys: new Set(), families: new Set(), units: new Set() };
   // Deliberately NOT wrapped: a failed plan read is a failed read (available:false).
   const rows = db
@@ -324,7 +437,7 @@ function planIndex(): PlanIndex {
     const name = String(row.name ?? "");
     const group = row.muscle_group == null ? null : String(row.muscle_group);
     index.ids.add(Number(row.id));
-    const resolved = resolveExerciseName(name);
+    const resolved = resolve(name);
     if (resolved.exercise_id != null) index.ids.add(Number(resolved.exercise_id));
     if (resolved.key) index.keys.add(resolved.key);
     for (const n of [name, resolved.canonical]) {
@@ -435,9 +548,77 @@ function postRaceDates(from: string, to: string): Set<string> {
   return out;
 }
 
+// ---------- the calendar's lighter days, asked once per read (cost) ----------
+//
+// The per-lift reads below used to ask the same session- and date-level questions once
+// per (lift, session): a few thousand small queries outside a request scope, a couple of
+// hundred inside one. These two readers ask each question once per READ instead, and
+// answer exactly what the per-call reads answer. Nothing here outlives the call.
+
+/**
+ * Is `date` inside a running recovery week (`activeRecoveryWeek(date) != null`), for
+ * dates in [from, to], asked once per read. Before the earliest stored recovery cycle,
+ * `activeRecoveryWeek` can only answer from the recovery-week LEDGER, whose window is one
+ * fixed span ([applied_on, until)); that span is read once. From the earliest cycle on,
+ * every date is asked as before (once). A failed read of either falls back to asking.
+ * Exported for the test that holds it to `activeRecoveryWeek`.
+ */
+export function recoveryWeekReader(from: string, to: string): (date: string) => boolean {
+  const asked = new Map<string, boolean>();
+  const ask = (date: string): boolean => {
+    let hit = asked.get(date);
+    if (hit == null) {
+      hit = safe(() => activeRecoveryWeek(date) != null, false);
+      asked.set(date, hit);
+    }
+    return hit;
+  };
+  let firstCycle: string;
+  let ledger: { applied_on: string; until: string } | null;
+  try {
+    const row = db.prepare(`SELECT MIN(effective_on) AS first FROM recovery_cycles`).get() as { first?: unknown };
+    firstCycle = row?.first == null ? "9999-12-31" : String(row.first).slice(0, 10);
+    ledger = activeRecoveryWeekLedger(to) ?? completedRecoveryWeekLedger(to);
+  } catch {
+    return ask;
+  }
+  return (date: string): boolean => {
+    if (date < from || date > to || date >= firstCycle) return ask(date);
+    return ledger != null && date >= ledger.applied_on && date < ledger.until;
+  };
+}
+
+/**
+ * The sessions in [from, to] that carry a stored card outcome, or null when the read
+ * failed (ask every session). A session with none was never prescribed anything, so no
+ * card asked it for less (`exposureLighterOnPurpose` reads that row and nothing else once
+ * the session counts toward the trajectory).
+ */
+function cardedSessionIds(from: string, to: string): Set<number> | null {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT o.session_id AS session_id
+           FROM daily_session_outcomes o JOIN sessions s ON s.id = o.session_id
+          WHERE s.date BETWEEN ? AND ?`
+      )
+      .all(from, to) as Array<{ session_id: unknown }>;
+    return new Set(rows.map((row) => Number(row.session_id)));
+  } catch {
+    return null;
+  }
+}
+
+type AsideReads = {
+  onDate: (date: string) => boolean;
+  carded: Set<number> | null;
+  /** `exposureLighterOnPurpose(sessionId, lift)` for a session that counts toward the trajectory, batched once per read. */
+  lighter: (sessionId: number, exercise: string) => boolean;
+};
+
 // ---------- per-variant series ----------
 
-function buildVariant(variant: Variant, bw: number | null, ctx: ReadContext, asideOn: (date: string) => boolean): void {
+function buildVariant(variant: Variant, bw: number | null, ctx: ReadContext, aside: AsideReads): void {
   const bySession = new Map<number, CapSet[]>();
   for (const set of variant.sets) {
     const list = bySession.get(set.session_id);
@@ -468,8 +649,14 @@ function buildVariant(variant: Variant, bw: number | null, ctx: ReadContext, asi
       if (!best || est > best.est_1rm) best = { date, top_weight: load, top_reps: set.reps, est_1rm: est };
     }
     if (!best) continue;
-    const aside = asideOn(date) || safe(() => exposureLighterOnPurpose(sessionId, variant.name), false);
-    variant.exposures.push({ ...best, session_id: sessionId, aside });
+    // The session counts (not a compliant recovery session), so what remains of
+    // exposureLighterOnPurpose is the card's own ask: only a carded session can have one.
+    // Asked through the read's one batched reader (every carded session's outcome row in
+    // one query), with the recovery-dose read skipped because the line above just did it.
+    const lighter =
+      aside.onDate(date) ||
+      ((aside.carded == null || aside.carded.has(sessionId)) && safe(() => aside.lighter(sessionId, variant.name), false));
+    variant.exposures.push({ ...best, session_id: sessionId, aside: lighter });
   }
   variant.exposures.sort((a, b) => a.date.localeCompare(b.date) || a.session_id - b.session_id);
 }
@@ -489,19 +676,38 @@ function longestGapDays(points: StrengthExposure[]): number {
   return longest;
 }
 
-function declinesBelow(v: Variant, reference: number, ctx: ReadContext): number {
+function declinesBelow(v: Variant, reference: number, ctx: ReadContext): number[] {
   const line = reference * (1 + CAPABILITY_SLIPPING_CHANGE);
-  return v.exposures.filter((e) => !e.aside && e.date >= ctx.earlier && e.est_1rm <= line + 1e-9).length;
+  return v.exposures
+    .filter((e) => !e.aside && e.date >= ctx.earlier && e.est_1rm <= line + 1e-9)
+    .map((e) => e.session_id);
 }
 
-function directionOf(change: number | null, declines: number): CapabilityVerdict {
+// The honest comparable sessions one variant stands on, all and in the current window.
+function addSessions(v: Variant, ctx: ReadContext, all: Set<number>, now: Set<number>): void {
+  for (const e of v.exposures) {
+    if (e.aside) continue;
+    all.add(e.session_id);
+    if (e.date >= ctx.earlier) now.add(e.session_id);
+  }
+}
+
+// The verdict from a change and the evidence under it. Fail closed: too few sessions is
+// not enough yet, and a decline on thin evidence holds rather than slips.
+function directionOf(change: number | null, evidence: Evidence): CapabilityVerdict {
   if (change == null || !Number.isFinite(change)) return "not_enough";
+  if (evidence.sessions < UNIT_MIN_SESSIONS) return "not_enough";
   if (change >= CAPABILITY_CLIMBING_CHANGE) return "climbing";
-  if (change <= CAPABILITY_SLIPPING_CHANGE && declines >= SLIPPING_MIN_EXPOSURES) return "slipping";
+  if (
+    change <= CAPABILITY_SLIPPING_CHANGE &&
+    evidence.declines >= SLIPPING_MIN_EXPOSURES &&
+    evidence.sessionsNow >= SLIPPING_MIN_WINDOW_SESSIONS
+  )
+    return "slipping";
   return "holding";
 }
 
-const NO_READ: VariantRead = { change: null, reference: null, transfer: "none", declines: 0, direction: "not_enough" };
+const NO_READ: VariantRead = { change: null, reference: null, transfer: "none", declines: [], direction: "not_enough" };
 
 function finishRead(
   v: Variant,
@@ -510,8 +716,12 @@ function finishRead(
   transfer: VariantRead["transfer"],
   ctx: ReadContext
 ): VariantRead {
-  const declines = change < 0 ? declinesBelow(v, reference, ctx) : 0;
-  return { change, reference, transfer, declines, direction: directionOf(change, declines) };
+  const declines = change < 0 ? declinesBelow(v, reference, ctx) : [];
+  const all = new Set<number>();
+  const now = new Set<number>();
+  addSessions(v, ctx, all, now);
+  const direction = directionOf(change, { sessions: all.size, sessionsNow: now.size, declines: declines.length });
+  return { change, reference, transfer, declines, direction };
 }
 
 // A variant's change: its own two windows, its own last three against its first three,
@@ -552,13 +762,21 @@ function readVariant(v: Variant, siblings: Variant[], ctx: ReadContext): Variant
     .map((c) => ({ ...c, earlierEnv: capacityEnvelopeAsOf(c.honest, ctx.earlier) }))
     .filter((c) => c.earlierEnv && c.earlierEnv.est_1rm > 0)
     .sort((a, b) => a.s.tier - b.s.tier || b.s.hardPrev - a.s.hardPrev || a.s.name.localeCompare(b.s.name));
-  const transfers = candidates.map((c) => ({
-    c,
-    t: variantTransfer({ name: v.name, exposures: honest }, { name: c.s.name, exposures: c.honest }),
-  }));
-  const learned = transfers.find((x) => x.t.kind === "learned");
-  const table = transfers.find((x) => x.t.kind === "table");
-  const pick = learned ?? table;
+  // A learned ratio from the first sibling that has one, else the first table edge: asked
+  // in candidate order and stopped at the first learned ratio (the bridge search is the
+  // costliest step of the read).
+  type Pick = { c: (typeof candidates)[number]; t: ReturnType<typeof variantTransfer> };
+  let pick: Pick | null = null;
+  let table: Pick | null = null;
+  for (const c of candidates) {
+    const t = variantTransfer({ name: v.name, exposures: honest }, { name: c.s.name, exposures: c.honest });
+    if (t.kind === "learned") {
+      pick = { c, t };
+      break;
+    }
+    if (t.kind === "table" && !table) table = { c, t };
+  }
+  pick ??= table;
   if (!pick || pick.t.kind === "none" || !pick.c.earlierEnv) return NO_READ;
   const reference = pick.c.earlierEnv.est_1rm * pick.t.ratio;
   if (!(reference > 0)) return NO_READ;
@@ -738,9 +956,9 @@ function isLowerBody(variants: Variant[]): boolean {
 
 type UnitBuild = { unit: CapabilityUnit; variants: Variant[]; reads: Map<number, VariantRead> };
 
-function buildUnit(identity: UnitIdentity, variants: Variant[], ctx: ReadContext): UnitBuild {
-  const phrase = unitPhrase(identity.key);
-  const label = capitalize(phrase);
+function buildUnit(identity: UnitIdentity, variants: Variant[], ctx: ReadContext, besideNamed = false): UnitBuild {
+  const phrase = unitPhrase(identity.key, besideNamed);
+  const label = unitLabel(identity.key, besideNamed);
   const reads = new Map<number, VariantRead>();
   const inPlan = ctx.planUnits.has(identity.key) || variants.some((v) => v.inPlan);
   const qualifiersFor = (verdict: CapabilityVerdict): CapabilityQualifier[] => {
@@ -775,7 +993,11 @@ function buildUnit(identity: UnitIdentity, variants: Variant[], ctx: ReadContext
   try {
     let weighted = 0;
     let weights = 0;
-    let declines = 0;
+    // Evidence is counted in SESSIONS across the contributors that carry a change: two
+    // variants trained in one session are one session, never two.
+    const sessions = new Set<number>();
+    const sessionsNow = new Set<number>();
+    const declines = new Set<number>();
     for (const v of variants) {
       const read = readVariant(
         v,
@@ -787,10 +1009,15 @@ function buildUnit(identity: UnitIdentity, variants: Variant[], ctx: ReadContext
       const weight = Math.max(v.hardNow, MIN_VOTE_SETS) * CAPABILITY_TIER_WEIGHT[v.tier];
       weighted += read.change * weight;
       weights += weight;
-      if (read.change < 0) declines += read.declines;
+      addSessions(v, ctx, sessions, sessionsNow);
+      if (read.change < 0) for (const id of read.declines) declines.add(id);
     }
     const change = weights > 0 ? weighted / weights : null;
-    const verdict = directionOf(change, declines);
+    const verdict = directionOf(change, {
+      sessions: sessions.size,
+      sessionsNow: sessionsNow.size,
+      declines: declines.size,
+    });
     const qualifiers = qualifiersFor(verdict);
     const now = variants.reduce((sum, v) => sum + v.hardNow, 0);
     const prev = variants.reduce((sum, v) => sum + v.hardPrev, 0);
@@ -844,38 +1071,99 @@ function unitOrder(a: CapabilityUnit, b: CapabilityUnit): number {
   return a.label.localeCompare(b.label);
 }
 
-function muscleReads(builds: UnitBuild[], hardSets: HardSet[], ctx: ReadContext): CapabilityMuscle[] {
+// A unit never credits a group its movement does not train, whatever the shared credit
+// table files it under. Tibialis anterior is not a calf: a tibialis raise is dorsiflexion,
+// the calves plantar-flex, and the canon only files it beside them for want of a group of
+// its own. So a tibialis unit neither votes in the calves' direction nor adds to their sets.
+export const UNIT_NEVER_CREDITS: Readonly<Record<string, readonly string[]>> = { tibialis: ["calves"] };
+
+// The muscle's direction follows the units that carry its recent work: each crediting
+// unit weighs share x its contributors' hard sets in the current window. The direction
+// needs MUSCLE_DIRECTION_SHARE of that weighted vote, AND agreement from the MAIN unit (the
+// one carrying the most of the muscle's recent work): a muscle never reads progressing
+// while its main unit is not climbing, nor slipping while its main unit is not slipping.
+/** The weighted vote a muscle's direction needs (a third, the overall read's own share). */
+export const MUSCLE_DIRECTION_SHARE = DIRECTION_SHARE;
+/** A muscle reads slipping only when its slipping units carry at least this share of its recent work. */
+export const MUSCLE_SLIPPING_MIN_WORK_SHARE = 0.5;
+
+type MuscleVote = { build: UnitBuild; weight: number };
+
+function muscleVerdict(votes: MuscleVote[]): CapabilityMuscle["verdict"] {
+  const mean = scoreMean(votes.map((u) => ({ verdict: u.build.unit.verdict, weight: u.weight })));
+  if (mean == null) return "not_enough";
+  // The main unit: the most work; ties go to the unit read first (compound, then key order).
+  let main: MuscleVote | null = null;
+  let total = 0;
+  let slipping = 0;
+  for (const vote of votes) {
+    if (!(vote.weight > 0)) continue;
+    total += vote.weight;
+    if (vote.build.unit.verdict === "slipping") slipping += vote.weight;
+    if (!main || vote.weight > main.weight + 1e-9) main = vote;
+  }
+  const lead = main?.build.unit.verdict ?? null;
+  if (mean >= MUSCLE_DIRECTION_SHARE && lead === "climbing") return "progressing";
+  if (
+    mean <= -MUSCLE_DIRECTION_SHARE &&
+    lead === "slipping" &&
+    total > 0 &&
+    slipping / total >= MUSCLE_SLIPPING_MIN_WORK_SHARE - 1e-9
+  )
+    return "slipping";
+  return "holding";
+}
+
+type VolumeSource = { unitKey: string; hardSets: HardSet[] };
+// Every set the muscle read counts is already a hard set: each counts in full.
+const COUNT_IN_FULL = () => 1;
+
+function muscleReads(builds: UnitBuild[], unlisted: Variant[], ctx: ReadContext): CapabilityMuscle[] {
   // Weekly hard sets per group over program state's band window. Every set here is
   // already a hard set, so each counts in full (no RIR discount) and no warm-up rule
-  // applies (the weight is withheld: the hard-set test already judged the load).
+  // applies (the weight is withheld: the hard-set test already judged the load). Counted
+  // per unit, so a group the unit never credits (UNIT_NEVER_CREDITS) is left out; a lift
+  // not listed as a unit (a lone catch-all lift) still counts here.
   const start = addDaysISO(ctx.date, -(MUSCLE_VOLUME_WEEKS * 7 - 1)) ?? ctx.date;
   const half = addDaysISO(ctx.date, -Math.floor((MUSCLE_VOLUME_WEEKS * 7) / 2)) ?? ctx.date;
-  const rows: VolumeSet[] = hardSets
-    .filter((s) => s.date >= start && s.date <= ctx.date)
-    .map((s) => ({
-      date: s.date,
-      exercise: s.exercise,
-      muscle_group: s.muscle_group,
-      weight: null,
-      reps: null,
-      rir: null,
-    }));
-  const full = effectiveVolumeByGroup(rows, () => 1);
-  const recent = effectiveVolumeByGroup(
-    rows.filter((r) => r.date >= half),
-    () => 1
-  );
+  const sources: VolumeSource[] = [
+    ...builds.map((b) => ({ unitKey: b.unit.key, hardSets: b.variants.flatMap((v) => v.hardSets) })),
+    ...unlisted.map((v) => ({ unitKey: v.unit.key, hardSets: v.hardSets })),
+  ];
+  const full = new Map<string, number>();
+  const recent = new Map<string, number>();
+  for (const source of sources) {
+    const excluded = UNIT_NEVER_CREDITS[source.unitKey] ?? [];
+    const rows: VolumeSet[] = source.hardSets
+      .filter((s) => s.date >= start && s.date <= ctx.date)
+      .map((s) => ({
+        date: s.date,
+        exercise: s.exercise,
+        muscle_group: s.muscle_group,
+        weight: null,
+        reps: null,
+        rir: null,
+      }));
+    if (!rows.length) continue;
+    const add = (into: Map<string, number>, volume: ReturnType<typeof effectiveVolumeByGroup>) => {
+      for (const [group, v] of volume) if (!excluded.includes(group)) into.set(group, (into.get(group) ?? 0) + v.sets);
+    };
+    const recentRows = rows.filter((r) => r.date >= half);
+    add(full, effectiveVolumeByGroup(rows, COUNT_IN_FULL));
+    add(recent, effectiveVolumeByGroup(recentRows, COUNT_IN_FULL));
+  }
 
   // Which units credit each group, and how heavily: share x the contributor's vote sets.
   // A touched (quarter) share never votes and never lists the unit.
-  const byGroup = new Map<string, Array<{ build: UnitBuild; weight: number }>>();
+  const byGroup = new Map<string, MuscleVote[]>();
   for (const build of builds) {
+    const excluded = UNIT_NEVER_CREDITS[build.unit.key] ?? [];
     const weights = new Map<string, number>();
     for (const v of build.variants) {
       const read = build.reads.get(v.id) ?? NO_READ;
       for (const credit of muscleCreditsShared(v.name, v.group)) {
         const group = canonicalGroup(credit.group);
-        if (!group || isMobility(group)) continue;
+        if (!group || isMobility(group) || excluded.includes(group)) continue;
         if (credit.role !== "primary" && !isCountedShare(credit.share)) continue;
         weights.set(group, (weights.get(group) ?? 0) + credit.share * voteSets(v, read));
       }
@@ -891,25 +1179,16 @@ function muscleReads(builds: UnitBuild[], hardSets: HardSet[], ctx: ReadContext)
   for (const group of MUSCLE_GROUPS) {
     if (group === "mobility") continue;
     const units = byGroup.get(group) ?? [];
-    const volume = full.get(group as MuscleGroup);
-    if (!units.length && !volume) continue;
-    const total = volume?.sets ?? 0;
-    const recentSets = recent.get(group as MuscleGroup)?.sets ?? 0;
+    const total = full.get(group) ?? 0;
+    if (!units.length && !(total > 0)) continue;
+    const recentSets = recent.get(group) ?? 0;
     const firstHalf = total - recentSets;
     const weekly = Math.round((total / MUSCLE_VOLUME_WEEKS) * 10) / 10;
     const landmark = MUSCLE_LANDMARKS[group];
     const band = weekly < (landmark?.low ?? 6) ? "low" : weekly > (landmark?.high ?? 20) ? "high" : "productive";
     const volumeTrend: CapabilityMuscle["volume_trend"] =
       total <= 0 ? null : recentSets > firstHalf * 1.2 ? "rising" : recentSets < firstHalf * 0.8 ? "falling" : "stable";
-    const mean = scoreMean(units.map((u) => ({ verdict: u.build.unit.verdict, weight: u.weight })));
-    const verdict: CapabilityMuscle["verdict"] =
-      mean == null
-        ? "not_enough"
-        : mean >= DIRECTION_SHARE
-          ? "progressing"
-          : mean <= -DIRECTION_SHARE
-            ? "slipping"
-            : "holding";
+    const verdict = muscleVerdict(units);
     const qualifiers: CapabilityQualifier[] = [];
     if (ctx.cut) qualifiers.push("cut");
     if (ctx.runBuild && bodyRegion(group as MuscleGroup) === "lower") qualifiers.push("run_build");
@@ -967,7 +1246,18 @@ function computeCapabilityRead(d: string, opts: CapabilityReadOpts): StrengthCap
   const prevFrom = addDaysISO(d, -2 * CAPABILITY_WINDOW_DAYS) ?? d;
   const from = addDaysISO(d, -CAPABILITY_READ_DAYS) ?? d;
   const rows = readRows(from, d);
-  const plan = planIndex();
+  // Each stored name resolved once per read, shared by the plan index and the log: the
+  // resolver is request-memoized, but outside a request (the scheduler, a test) nothing is.
+  const resolvedByName = new Map<string, ReturnType<typeof resolveExerciseName>>();
+  const resolve = (name: string): ReturnType<typeof resolveExerciseName> => {
+    let resolved = resolvedByName.get(name);
+    if (!resolved) {
+      resolved = resolveExerciseName(name);
+      resolvedByName.set(name, resolved);
+    }
+    return resolved;
+  };
+  const plan = planIndex(resolve);
 
   const programState = opts.programState ?? safe<ProgramState | null>(() => getProgramState(d), null);
   const ctx: ReadContext = {
@@ -981,31 +1271,26 @@ function computeCapabilityRead(d: string, opts: CapabilityReadOpts): StrengthCap
   };
 
   // Lighter on purpose by the calendar: a recovery week running that day, a race and its
-  // window. Asked once per date.
+  // window. Asked once per read, never once per lift.
   const raceDays = postRaceDates(from, d);
-  const recoveryByDate = new Map<string, boolean>();
-  const asideOn = (date: string): boolean => {
-    if (raceDays.has(date)) return true;
-    let hit = recoveryByDate.get(date);
-    if (hit == null) {
-      hit = safe(() => activeRecoveryWeek(date) != null, false);
-      recoveryByDate.set(date, hit);
-    }
-    return hit;
+  const inRecoveryWeek = recoveryWeekReader(from, d);
+  const carded = cardedSessionIds(from, d);
+  const aside: AsideReads = {
+    onDate: (date: string): boolean => raceDays.has(date) || inRecoveryWeek(date),
+    carded,
+    // A failed carded read (null) leaves the reader empty: every session then falls back
+    // to the single read, exactly as before.
+    lighter: safe(
+      () => lighterOnPurposeReader(carded ?? [], { recoveryChecked: true }),
+      (sessionId: number, exercise: string) => exposureLighterOnPurpose(sessionId, exercise, { recoveryChecked: true })
+    ),
   };
 
   // Variants, by the resolver's stored lift.
   const variants = new Map<number, Variant>();
-  // Asked once per stored name: the resolver is request-memoized, but outside a request
-  // (the scheduler, a test) nothing is.
-  const resolvedByName = new Map<string, ReturnType<typeof resolveExerciseName>>();
   for (const row of rows) {
     if (!row.exercise || isPlaceholderExerciseName(row.exercise) || isMobility(row.muscle_group)) continue;
-    let resolved = resolvedByName.get(row.exercise);
-    if (!resolved) {
-      resolved = resolveExerciseName(row.exercise);
-      resolvedByName.set(row.exercise, resolved);
-    }
+    const resolved = resolve(row.exercise);
     const id = Number(resolved.exercise_id ?? row.exercise_id);
     let variant = variants.get(id);
     if (!variant) {
@@ -1026,6 +1311,7 @@ function computeCapabilityRead(d: string, opts: CapabilityReadOpts): StrengthCap
         hardNow: 0,
         hardPrev: 0,
         inPlan: liftOnPlan(plan, row.exercise_id, resolved, name),
+        pattern: classifyPattern(name, row.muscle_group ?? undefined, { profile: true }),
       };
       variants.set(id, variant);
     }
@@ -1037,27 +1323,42 @@ function computeCapabilityRead(d: string, opts: CapabilityReadOpts): StrengthCap
   const byUnit = new Map<string, { identity: UnitIdentity; variants: Variant[] }>();
   for (const variant of variants.values()) {
     variant.bodyweight = isBodyweightVariant(variant.name, variant.sets);
-    buildVariant(variant, bw, ctx, asideOn);
+    buildVariant(variant, bw, ctx, aside);
     const entry = byUnit.get(variant.unit.key) ?? { identity: variant.unit, variants: [] };
     entry.variants.push(variant);
     byUnit.set(variant.unit.key, entry);
   }
 
   // A unit untrained for two windows is not part of the read: its lifts have gone quiet.
+  const live = [...byUnit.values()].filter(({ variants: members }) => members.some((v) => v.lastTrained >= prevFrom));
+  // The catch-alls (`<pattern>:accessory`): at most one per pattern by construction. One
+  // beside a NAMED unit of its own pattern is "Other ... work", and is listed only when it
+  // holds at least CATCH_ALL_MIN_LIFTS lifts: a lone leftover lift beside a named unit is
+  // not a movement read, so it is not listed (its hard sets still reach the muscle read).
+  const namedPatterns = new Set<string>();
+  for (const { identity, variants: members } of live) {
+    if (catchAllPattern(identity.key)) continue;
+    for (const v of members) if (v.pattern) namedPatterns.add(v.pattern);
+  }
   const builds: UnitBuild[] = [];
-  for (const { identity, variants: members } of byUnit.values()) {
-    if (!members.some((v) => v.lastTrained >= prevFrom)) continue;
-    builds.push(buildUnit(identity, members, ctx));
+  const unlisted: Variant[] = [];
+  for (const { identity, variants: members } of live) {
+    const pattern = catchAllPattern(identity.key);
+    const besideNamed = pattern != null && namedPatterns.has(pattern);
+    if (besideNamed && members.length < CATCH_ALL_MIN_LIFTS) {
+      unlisted.push(...members);
+      continue;
+    }
+    builds.push(buildUnit(identity, members, ctx, besideNamed));
   }
   builds.sort((a, b) => unitOrder(a.unit, b.unit));
 
-  const hardSets = builds.flatMap((b) => b.variants.flatMap((v) => v.hardSets));
   return {
     available: true,
     date: d,
     overall: overallRead(builds, plan.ids.size > 0, ctx),
     units: builds.map((b) => b.unit),
-    muscles: muscleReads(builds, hardSets, ctx),
+    muscles: muscleReads(builds, unlisted, ctx),
   };
 }
 
@@ -1076,12 +1377,30 @@ function capabilityReadSafe(d: string, opts: CapabilityReadOpts): StrengthCapabi
 /** Progress per movement unit and per muscle group as of `date`, the single lift as evidence. */
 export function capabilityRead(date: string = localDateISO(), opts: CapabilityReadOpts = {}): StrengthCapabilityRead {
   const d = typeof date === "string" && /^\d{4}-\d{2}-\d{2}/.test(date) ? date.slice(0, 10) : localDateISO();
-  // Request-memoized for the bare form, keyed the way program state is; an injected
-  // program state is an object the key cannot name, so it computes directly.
-  if (opts.programState) return capabilityReadSafe(d, opts);
-  return requestMemo(
-    `strength_capability:${d}:${localDateISO()}:${currentTrainingDataVersion()}`,
-    () => capabilityReadSafe(d, opts),
-    copyDeep
-  );
+  // Asked outside a request (the scheduler, a script, a test), the call opens its own
+  // snapshot scope for its duration (`runWithBrainSnapshot` joins an existing one), so
+  // the per-session reads every lift repeats (a session's recovery dose and stored card,
+  // an exercise's identity) are read once per call instead of once per lift: a few
+  // thousand queries down to the per-session floor. The read writes nothing, and every
+  // memo still holds only while the write odometer has not moved (request-memo.ts).
+  return runWithBrainSnapshot(() => {
+    // Request-memoized for the bare form, keyed the way program state is; an injected
+    // program state is an object the key cannot name, so it computes directly.
+    if (opts.programState) return capabilityReadSafe(d, opts);
+    try {
+      // A failed read throws through the memo, so a failure is never remembered: the
+      // next ask reads again. Program state is finished BY this read (its capability
+      // pass), and computing the read asks program state first — so a bare read is served
+      // the read the pass already computed (`finishedCapabilityRead`), never a second
+      // computation of the same read. Only inside a pass, or when the pass's read was
+      // unavailable, is it computed here.
+      return requestMemo(
+        `strength_capability:${d}:${localDateISO()}:${currentTrainingDataVersion()}`,
+        () => finishedCapabilityRead(d) ?? computeCapabilityRead(d, opts),
+        copyDeep
+      );
+    } catch {
+      return unavailable(d);
+    }
+  });
 }

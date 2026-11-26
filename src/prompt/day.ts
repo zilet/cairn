@@ -958,13 +958,26 @@ export function buildDailyCompositionPrompt(envelope: any, ctx?: CoachContext): 
       : [];
   const holdLift = loadHeldAreas.length && typeof stress?.hold_exercise === "string" ? stress.hold_exercise : null;
   const reducedList = allReduced.filter((g) => !loadHeldAreas.includes(g));
-  const loadHeldLine = loadHeldAreas.length
-    ? `\n- FEWER SETS, SAME WEIGHT (a key run is close): ${loadHeldAreas.join(", ")}. Keep every lift here at its prescribed weight and write fewer sets — do NOT lower the load; the server caps the sets whatever you write.${
-        holdLift
-          ? ` ${holdLift} is the day's main lift and stays exactly as written (all its sets, its weight) — the trim is for the other lifts in these areas.`
-          : ""
-      }`
-    : "";
+  // The STANDING eve (no race build) is ITEM-scoped: only the accessories it names lose a
+  // set, one each, at their load; a compound in the same area stays as written. Say so by
+  // name, or the agent reads the area-level line and trims the squat too.
+  const standingTrims: string[] =
+    stress?.scope === "standing" && Array.isArray(stress.trim_exercises)
+      ? stress.trim_exercises.map((name: unknown) => String(name ?? "").trim()).filter(Boolean)
+      : [];
+  const loadHeldLine = !loadHeldAreas.length
+    ? ""
+    : stress?.scope === "standing"
+      ? `\n- ONE SET OFF, SAME WEIGHT (a key run is close): ${
+          standingTrims.length ? standingTrims.join(", ") : "the lower accessories"
+        } ${standingTrims.length === 1 ? "is the ONLY lift" : "are the ONLY lifts"} that lose a set today — one set each, at the prescribed weight; do NOT lower the load. Every compound in ${loadHeldAreas.join(", ")} (a squat, a deadlift, a lunge) stays exactly as written: all its sets, its weight.${
+          holdLift ? ` ${holdLift} is the day's main lift and stays exactly as written.` : ""
+        }`
+      : `\n- FEWER SETS, SAME WEIGHT (a key run is close): ${loadHeldAreas.join(", ")}. Keep every lift here at its prescribed weight and write fewer sets — do NOT lower the load; the server caps the sets whatever you write.${
+          holdLift
+            ? ` ${holdLift} is the day's main lift and stays exactly as written (all its sets, its weight) — the trim is for the other lifts in these areas.`
+            : ""
+        }`;
   const requiredList = Array.isArray(muscles.required) ? muscles.required : [];
   return `${CAIRN_PERSONA}
 

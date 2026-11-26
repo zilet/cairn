@@ -1369,6 +1369,85 @@ export function renderWeekTrainingLoadPointer(ctx: PartialCoachContext): string 
   return `WHOLE WEEK: when DATA carries week_training_load, it is the one whole-week load picture — every sport (runs with the intention each closed, rides, paddles, walks, anything the watch logged) plus the lifting with its leg/upper split, the key-run spacing, and the next 48 hours. Read the week from it rather than assembling it from the raw activity rows. Its cross_training_day is a known pattern of the athlete's week (a ride the day before the long run is their week), not a conflict to plan around.\n`;
 }
 
+// How a plan-shaping prompt judges progress (the owner's rule, and the capability read's).
+export const PROGRESS_BY_MOVEMENT_RULE = `HOW TO JUDGE PROGRESS: judge it per movement and per muscle (DATA.capability), with the single lift as evidence. A swap between variants inside one movement is not a reset and never a plateau. A movement holding through a cut or a run build is the plan working (holding strength in a deficit is the win; legs easing under a run build is expected), so it is not a plateau to rotate or to add volume to. A lift off the plan and not trained lately is resting, never stalled.`;
+
+const BECAUSE_WORDS: Readonly<Record<string, string>> = {
+  cut: "the cut",
+  run_build: "the run build",
+  recovery: "a lighter week",
+};
+
+// How a plan-shaping prompt follows the plateau ladder (unit-plateau.ts): two sentences.
+export const PLATEAU_LADDER_RULE = `- THE PLATEAU LADDER: DATA.unit_plateau names, for each stalled movement on the plan, the ONE next lever Cairn's deterministic ladder chose ("rep_scheme": a higher rep range at the same weight; "set_quality": take the sets closer to failure, not more sets; "volume": one more set; "variation": rotate its "candidate" in) — follow the ladder's lever rather than inventing a different one, and leave a stalled movement it does not list alone for now. A compound anchor (compound:true) whose lever is "variation" is the redraw's to rotate, as a "swap":{from,to} to its candidate, and at most ONE anchor per block.`;
+
+// The ladder's lever, in the prompt's own words.
+const LADDER_LEVER_WORDS: Readonly<Record<string, string>> = {
+  rep_scheme: "a higher rep range at the same weight",
+  set_quality: "sets taken closer to failure, not more sets",
+  volume: "one more set",
+  variation: "rotate a close variation in",
+};
+
+// The movement-level act-on lines: units that need a call (holding or slipping with nothing
+// to explain it), units holding as planned, units climbing. A needing unit carries the lever
+// the plateau ladder names for it (ctx.unit_plateau) when the ladder rode along; a holding
+// unit the ladder does not list waits. With no ladder in the context (a partial builder) the
+// lever is its lift's own stall tell, as before.
+function renderMovementCalls(cap: any, lifts: any[], ladder: any[] | null): string[] {
+  const out: string[] = [];
+  const units = (Array.isArray(cap?.units) ? cap.units : []).filter((u: any) => u && typeof u.movement === "string");
+  const liftByName = new Map<string, any>(lifts.map((l: any) => [String(l?.exercise ?? "").toLowerCase(), l]));
+  const rungByMovement = new Map<string, any>(
+    (ladder ?? []).filter((r: any) => r && typeof r.unit === "string").map((r: any) => [r.unit.toLowerCase(), r])
+  );
+  const flat = (u: any) => u.verdict === "holding" || u.verdict === "slipping";
+  const needs = units.filter((u: any) => flat(u) && !u.because);
+  const planned = units.filter((u: any) => flat(u) && u.because);
+  const climbing = units.filter((u: any) => u.verdict === "climbing");
+  if (needs.length) {
+    out.push(
+      ladder
+        ? "MOVEMENTS THAT NEED A CALL (judged per movement in DATA.capability; the lifts are the evidence, the lever is the plateau ladder's — a slipping movement is backed off, never given more):"
+        : "MOVEMENTS THAT NEED A CALL (judged per movement in DATA.capability; the lifts are the evidence, the lever is the lift's own deterministic read):"
+    );
+    for (const u of needs.slice(0, 8)) {
+      const names: string[] = Array.isArray(u.lifts) ? u.lifts : [];
+      let lever = "";
+      if (ladder) {
+        const rung = rungByMovement.get(String(u.movement).toLowerCase());
+        lever =
+          u.verdict === "slipping"
+            ? " → back off and let it rebuild"
+            : rung && LADDER_LEVER_WORDS[rung.lever]
+              ? ` → next: ${LADDER_LEVER_WORDS[rung.lever]}${rung.lever === "variation" && rung.candidate ? ` (${rung.candidate} in for ${rung.lift ?? names[0] ?? "the lift"})` : rung.lift ? ` (${rung.lift})` : ""}`
+              : " → wait: no lever yet (too young, explained, or already moving)";
+      } else {
+        const stalled = names
+          .map((n) => liftByName.get(String(n).toLowerCase()))
+          .find((l: any) => l && (l.status === "plateaued" || l.status === "regressing"));
+        lever = stalled
+          ? ` → ${stalled.exercise} ${stalled.suggested_action}${Array.isArray(stalled.stall_signals) && stalled.stall_signals.length ? ` (${stalled.stall_signals.join("; ")})` : ""}`
+          : "";
+      }
+      out.push(`  - ${u.movement} [${u.verdict}] (${names.join(", ")})${lever}`);
+    }
+  }
+  if (planned.length) {
+    out.push(
+      `HOLDING AS PLANNED (not a plateau — no variation, no added volume): ${planned
+        .slice(0, 8)
+        .map((u: any) => `${u.movement} (through ${BECAUSE_WORDS[u.because] ?? "the current phase"})`)
+        .join(", ")}.`
+    );
+  }
+  if (climbing.length) {
+    const names = climbing.map((u: any) => (Array.isArray(u.lifts) && u.lifts[0]) || u.movement).slice(0, 6);
+    out.push(`PROGRESSING (push the next conservative step here): ${names.join(", ")}.`);
+  }
+  return out;
+}
+
 export function renderProgramState(ctx: PartialCoachContext, opts: { brief?: boolean } = {}): string {
   const st = ctx?.program_state as any;
   const bal = ctx?.program_balance as any;
@@ -1409,22 +1488,29 @@ export function renderProgramState(ctx: PartialCoachContext, opts: { brief?: boo
     return lines.length ? `\n${lines.join("\n")}\n` : "";
   }
 
-  // Per-lift trajectory — lead with what needs action (stalled / slipping), so the
-  // coach's changes target the lifts that earned them.
   // A resting lift (off the plan, not trained lately) is out of the rotation — never one
   // to act on or push.
   const lifts = (Array.isArray(st?.lifts) ? st.lifts : []).filter((l: any) => l?.resting !== true);
-  const needsAction = lifts.filter((l: any) => l.status === "plateaued" || l.status === "regressing");
-  const climbing = lifts.filter((l: any) => l.status === "progressing");
-  if (needsAction.length) {
-    lines.push("LIFTS THAT NEED A CALL (act on these — the suggested_action is the deterministic read):");
-    for (const l of needsAction.slice(0, 8)) {
-      const tells = Array.isArray(l.stall_signals) && l.stall_signals.length ? ` (${l.stall_signals.join("; ")})` : "";
-      lines.push(`  - ${l.exercise} [${l.status}] → ${l.suggested_action}${tells}: ${String(l.why ?? "").trim()}`);
+  const cap = ctx?.capability as any;
+  if (cap && Array.isArray(cap.units)) {
+    // Progress per MOVEMENT (DATA.capability): what needs a call is a movement, the lifts
+    // named are its evidence, and the per-lift stall list is not repeated beside it.
+    const ladder = Array.isArray((ctx as any)?.unit_plateau) ? ((ctx as any).unit_plateau as any[]) : null;
+    lines.push(...renderMovementCalls(cap, lifts, ladder));
+  } else {
+    // No capability read in hand: the per-lift trajectory, leading with what needs action.
+    const needsAction = lifts.filter((l: any) => l.status === "plateaued" || l.status === "regressing");
+    const climbing = lifts.filter((l: any) => l.status === "progressing");
+    if (needsAction.length) {
+      lines.push("LIFTS THAT NEED A CALL (act on these — the suggested_action is the deterministic read):");
+      for (const l of needsAction.slice(0, 8)) {
+        const tells = Array.isArray(l.stall_signals) && l.stall_signals.length ? ` (${l.stall_signals.join("; ")})` : "";
+        lines.push(`  - ${l.exercise} [${l.status}] → ${l.suggested_action}${tells}: ${String(l.why ?? "").trim()}`);
+      }
     }
-  }
-  if (climbing.length) {
-    lines.push(`PROGRESSING (push the next conservative step here): ${climbing.slice(0, 6).map((l: any) => l.exercise).join(", ")}.`);
+    if (climbing.length) {
+      lines.push(`PROGRESSING (push the next conservative step here): ${climbing.slice(0, 6).map((l: any) => l.exercise).join(", ")}.`);
+    }
   }
 
   // The full block leads its volume read with the acute recovery line (computed above).

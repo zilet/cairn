@@ -172,7 +172,8 @@ export function buildExerciseEnrichPrompt(detail: any): string {
     muscle_group: detail?.muscle_group ?? null,
     mode: detail?.mode ?? "reps",
     equipment: detail?.equipment ?? null,
-    constraint_note: detail?.constraint_note ?? null,
+    // Deliberately no constraint_note (as buildExerciseProfilePrompt): it can hold pain or
+    // injury text, and nothing this classification returns depends on it.
   };
   // The FIT taxonomy the watch speaks. The deterministic mapper already answered as
   // far as its token overlap can (src/repo/garmin-exercise-map.ts); the model is

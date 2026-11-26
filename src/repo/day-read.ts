@@ -84,7 +84,13 @@ import { getEnduranceGoal, getEnduranceSchedule, getPrimaryDiscipline, WEEKDAY_N
 import { RUN_KIND_LABELS } from "./run-edit.js";
 import { activeRecoveryWeek } from "./recovery-week.js";
 import { isRaceDay, raceRecoveryWindow } from "./race-recovery.js";
-import { getProgramState, logConfirmedFatigue, runVolumeSpikeRead, type MesocycleState } from "./program-state.js";
+import {
+  getProgramState,
+  logConfirmedFatigue,
+  programStateSignalKey,
+  runVolumeSpikeRead,
+  type MesocycleState,
+} from "./program-state.js";
 import {
   CHECKIN_LIFT_STEP,
   MORNING_DOSE_POLICY,
@@ -1042,12 +1048,13 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
     // read of an earlier date gets that date's mesocycle instead of one measured
     // from today (which would tell a day inside an applied recovery week that a
     // reset was months overdue). getProgramState defaults to today for `undefined`,
-    // so passing the date through is equivalent for the common case.
+    // so passing the date through is equivalent for the common case. The key is
+    // programStateSignalKey's, so a partial state (read while a capability pass is in
+    // flight) is never shared under the finished state's key.
     const programState =
       provided.programState ??
       signalInput(
-        () =>
-          brainSignal(isLiveDate ? "program_state" : `program_state:${date}`, () => getProgramState(date, recovery)),
+        () => brainSignal(programStateSignalKey(date), () => getProgramState(date, recovery)),
         null
       );
     const expenditure =
@@ -1505,8 +1512,7 @@ function planDayAcutelySaturated(dayNumber: number, date: string): boolean {
 function planDayClearOfEndurance(dayNumber: number, date: string): boolean {
   const groups = planDayStrengthGroups().find((day) => day.day_number === dayNumber)?.groups ?? [];
   if (!groups.length) return false;
-  const live = date === localDateISO();
-  const state: any = brainSignal(live ? "program_state" : `program_state:${date}`, () => getProgramState(date));
+  const state: any = brainSignal(programStateSignalKey(date), () => getProgramState(date));
   const affected: unknown = state?.hybrid?.affected_groups;
   if (!Array.isArray(affected) || !affected.length) return false;
   const loaded = new Set(affected.map(String));
@@ -2617,11 +2623,15 @@ function computeDayRead(
         lowWord: lowSubjective,
         symptomToday: freshStatementHold(d, null) === "symptom_report",
         cardioLoadMedian,
+        // The deload's own log-confirmed shortfall, on the state's own capability summary:
+        // slipping movement units (the cut never explains one away; a lighter week or a
+        // leg unit under a run build does), and the lift rule whenever the summary is not
+        // usable — a failed capability read never switches this off.
         performanceShortfall: () => {
-          const state: any = brainSignal(d === localDateISO() ? "program_state" : `program_state:${d}`, () =>
-            getProgramState(d)
-          );
-          return logConfirmedFatigue(d, Array.isArray(state?.lifts) ? state.lifts : []).high;
+          const state: any = brainSignal(programStateSignalKey(d), () => getProgramState(d));
+          const lifts = Array.isArray(state?.lifts) ? state.lifts : [];
+          return logConfirmedFatigue(d, lifts, state && "capability" in state ? (state.capability ?? null) : undefined)
+            .high;
         },
       });
       return { facts, verdict: classifyMorning(facts, statedCalendarDay() != null) };

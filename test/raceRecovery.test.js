@@ -563,10 +563,12 @@ test("gather end to end: inside the window the snapshot carries it; the day afte
       race_recovery: { day_index: 3, days: 4, back_on: "2026-11-06", event: "Riverside Half" },
     }
   );
-  assert.equal(
-    stressBudgetSnapshot("2026-11-06", { dayType: "training", planItems: items, enduranceRole: "supporting" }),
-    undefined
-  );
+  // The day after the window is an ordinary day: no recovery slice, no race fields —
+  // only the standing key-run eve (stress-budget.ts rule 3b) before Saturday's long run.
+  const nextDay = stressBudgetSnapshot("2026-11-06", { dayType: "training", planItems: items, enduranceRole: "supporting" });
+  assert.equal(nextDay?.race_recovery, undefined, JSON.stringify(nextDay));
+  assert.equal(nextDay?.race_week_kind, undefined, JSON.stringify(nextDay));
+  assert.ok(nextDay == null || nextDay.key_run?.in_days === 1, JSON.stringify(nextDay));
   assert.equal(calendarLegTrim("2026-11-04", items), "post_race_recovery", "a day ahead reads the same trim");
   assert.equal(calendarLegTrim("2026-11-06", items), null);
 

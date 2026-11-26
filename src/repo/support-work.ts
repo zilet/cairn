@@ -14,6 +14,7 @@
 import { movementKey, type MuscleGroup } from "./exercise-canon.js";
 import { getProgramState, type LiftState, type MuscleVolumeState } from "./program-state.js";
 import { joinList } from "./shared.js";
+import { liftCallStands } from "./capability-consumers.js";
 
 // ---- the support map --------------------------------------------------------
 // A curated compound-movement → contributing-muscle map. `pattern` is matched as a
@@ -179,6 +180,9 @@ export function supportWorkRead(date?: string, opts: { programState?: any } = {}
   for (const lift of lifts) {
     if (lift?.status !== "plateaued" && lift?.status !== "regressing") continue;
     if (lift?.resting === true) continue; // out of the rotation: no weak link to build for it
+    // The movement decides, the lift is evidence: a stalled variant inside a climbing unit,
+    // or a unit holding through the cut or a run build, is no weak link to build for.
+    if (!liftCallStands(ps?.capability ?? null, String(lift.exercise ?? ""))) continue;
     const support = matchSupport(String(lift.exercise ?? ""));
     if (!support) continue;
 

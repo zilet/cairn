@@ -32,6 +32,28 @@ export interface CapabilityUnit {
   /** One athlete-facing sentence (reading grammar; no numbers that read as a score). */
   line: string;
   contributors: CapabilityContributor[];
+  /**
+   * The plateau ladder's next lever for this unit (src/repo/unit-plateau.ts), filled only
+   * where a surface composes the read with the ladder (`capabilityWithLadder`): the REST
+   * route and the MCP tool. Absent on the bare read, on an off-plan unit, and when the
+   * ladder could not be read.
+   */
+  next?: CapabilityUnitNext;
+}
+
+/** The plateau ladder's levers, in ladder order. `none`: still climbing; `wait`: the hold is explained or too young. */
+export type CapabilityNextLever = "none" | "wait" | "rep_scheme" | "set_quality" | "volume" | "variation";
+
+export interface CapabilityUnitNext {
+  lever: CapabilityNextLever;
+  /** Plain words, athlete-facing register; never a number that reads as a score. */
+  reason: string;
+  /** The plan lift the unit is judged on. */
+  plan_lift: string | null;
+  /** The variant a `variation` lever would rotate in. */
+  candidate: string | null;
+  /** The rep range a `rep_scheme` lever would write. */
+  rep_range?: { rep_low: number; rep_high: number } | null;
 }
 
 export interface CapabilityMuscle {

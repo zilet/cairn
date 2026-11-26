@@ -96,6 +96,20 @@ CREATE TABLE IF NOT EXISTS exercise_profile (
   rules_version INTEGER NOT NULL DEFAULT 1,
   classified_at TEXT DEFAULT (datetime('now'))
 );
+-- The ledger of a stored muscle group moved by the deterministic re-check on a
+-- high-confidence agent profile the curated tables agree with (repo/exercises.ts
+-- recheckExerciseGroups, repo/exercise-group-corrections.ts): the previous value is
+-- always readable back. Append-only.
+CREATE TABLE IF NOT EXISTS exercise_group_corrections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  exercise_id INTEGER NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
+  from_group TEXT,
+  into_group TEXT NOT NULL,
+  source_was TEXT,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_group_corrections_ex ON exercise_group_corrections(exercise_id, id);
 -- Imported instructional guides for a movement: step-by-step text, muscles worked,
 -- equipment and two demonstration photos, from the public-domain free-exercise-db
 -- dataset. Entirely OPTIONAL — the table is empty until the athlete runs the import,

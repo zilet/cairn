@@ -4573,7 +4573,8 @@ declare global {
 
     CairnProgressCapability: {
       capVerdictWord(verdict: unknown): string;
-      capQualifierWord(qualifier: unknown): string;
+      capQualifierWord(qualifier: unknown, verdict?: unknown): string;
+      capNextLine(next: import("./strength-capability.js").CapabilityUnitNext | null | undefined): string;
       capabilityHtml(read: unknown): string;
       loadCapability(): Promise<void>;
     };

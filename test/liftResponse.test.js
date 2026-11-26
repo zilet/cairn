@@ -206,7 +206,8 @@ function seedLongFlat(prescribedDaysAgo) {
 
 test("a settled vary carries one plain sentence and one lead option; the menu stays in vary_options", () => {
   seedLongFlat(90);
-  const p = nextPrescription("Leg Press");
+  // The engine's own rotation, read without the plateau ladder (ladderWiring.test.js pins the deferral).
+  const p = nextPrescription("Leg Press", undefined, { ladder: null });
   assert.equal(p.action, "vary");
   assert.ok(p.vary_to, "a lead option");
   assert.equal(p.vary_to, p.vary_options[0].name, "the lead is the menu's first");

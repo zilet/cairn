@@ -556,3 +556,147 @@ test("the profile prompt never carries the lift's constraint note (it can hold p
   assert.ok(!prompt.includes("constraint_note"), "nor its key");
   assert.ok(prompt.includes("a barbell") && prompt.includes("chest"), "the mechanics' own facts still are");
 });
+
+test("constraint_note is named in neither profile output schema (nothing reads it back from the agent)", () => {
+  for (const schema of [contracts.EXERCISE_PROFILE_SCHEMA, contracts.EXERCISE_ENRICH_SCHEMA]) {
+    assert.equal(JSON.stringify(schema).includes("constraint_note"), false);
+  }
+});
+
+// ---- telemetry: the profile job records its own agent_runs row -------------------------
+
+const profileRuns = () =>
+  db.prepare("SELECT op, agent, ok, parsed, status, error_class, latency_ms FROM agent_runs WHERE op = 'enrich_exercise_profile'").all();
+
+test("a profile job records one agent_runs row on success and on failure, none when the host is busy", async () => {
+  db.prepare("DELETE FROM agent_runs").run();
+  const good = trained(UNKNOWN);
+  await enrich.processExerciseProfileJob(good);
+  let rows = profileRuns();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].agent, "profiler");
+  assert.equal(rows[0].ok, 1);
+  assert.equal(rows[0].parsed, 1);
+  assert.equal(rows[0].status, "ok");
+  assert.ok(rows[0].latency_ms >= 0);
+
+  db.prepare("DELETE FROM agent_runs").run();
+  const bad = trained("Zzq Second Gizmo");
+  repo.setSettings({ disabled_agents: ["profiler", "slow", "bad2"] }); // only "bad" answers, with garbage
+  await enrich.processExerciseProfileJob(bad);
+  rows = profileRuns();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].agent, "bad");
+  assert.equal(rows[0].ok, 0);
+  assert.equal(rows[0].error_class, "invalid_json");
+
+  db.prepare("DELETE FROM agent_runs").run();
+  repo.setSettings({ disabled_agents: ["bad", "bad2"] });
+  const busy = trained("Zzq Third Gizmo");
+  const prior = process.env.CAIRN_MAX_AGENT_PROCS;
+  process.env.CAIRN_MAX_AGENT_PROCS = "1";
+  try {
+    const holder = runAgent("slow", "hold the permit", { timeoutMs: 15_000 });
+    await new Promise((r) => setTimeout(r, 400));
+    await assert.rejects(
+      () => enrich.processExerciseProfileJob(busy, { timeoutMs: 150 }),
+      (e) => isAgentBusyError(e),
+    );
+    await holder;
+  } finally {
+    if (prior === undefined) delete process.env.CAIRN_MAX_AGENT_PROCS;
+    else process.env.CAIRN_MAX_AGENT_PROCS = prior;
+  }
+  assert.equal(profileRuns().length, 0, "congestion is never a run, let alone a failure");
+});
+
+// ---- a legacy group follows a high-confidence profile, under the rule ------------------
+
+const { exerciseGroupCorrections } = await import("../dist/repo/exercise-group-corrections.js");
+const setSource = (id, group, source) =>
+  db.prepare("UPDATE exercises SET muscle_group = ?, muscle_group_source = ? WHERE id = ?").run(group, source, id);
+
+test("a legacy group the curated tables are silent on stays: an agent's word alone never moves what may be a person's choice", () => {
+  const id = lift(UNKNOWN);
+  setSource(id, "triceps", "legacy");
+  writeExerciseProfile(id, { ...GOOD, primary_group: "chest", confidence: "high" }, { source: "agent", agent: "profiler" });
+  const res = recheckExerciseGroups();
+  assert.equal(res.changes.find((c) => c.id === id), undefined);
+  assert.equal(getExercise(id).muscle_group, "triceps");
+  assert.equal(getExercise(id).muscle_group_source, "legacy");
+  assert.equal(exerciseGroupCorrections(id).length, 0);
+});
+
+test("a legacy group follows a high-confidence profile the tables agree with, and the correction is recoverable", () => {
+  const id = lift("Close-Grip Bench Press"); // curated answer: triceps
+  setSource(id, "chest", "legacy");
+  writeExerciseProfile(id, { ...GOOD, primary_group: "triceps", confidence: "high" }, { source: "agent", agent: "profiler" });
+  const res = recheckExerciseGroups();
+  assert.deepEqual(res.changes.find((c) => c.id === id), {
+    id,
+    name: "Close-Grip Bench Press",
+    from: "chest",
+    into: "triceps",
+    source_was: "legacy",
+  });
+  assert.equal(getExercise(id).muscle_group_source, "agent");
+  const ledger = exerciseGroupCorrections(id);
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].from_group, "chest");
+  assert.equal(ledger[0].source_was, "legacy");
+  assert.equal(recheckExerciseGroups().updated, 0, "idempotent");
+});
+
+test("the corrections ledger is part of the schema, not created on first use", () => {
+  const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'exercise_group_corrections'`).get();
+  assert.ok(row, "db.ts creates the table at boot");
+});
+
+test("a merged-away lift's correction record follows the survivor", () => {
+  const from = lift("Zzq Merge Gizmo");
+  const into = lift("Zzq Survivor Gizmo");
+  db.prepare(
+    `INSERT INTO exercise_group_corrections (exercise_id, from_group, into_group, source_was, reason) VALUES (?, 'chest', 'triceps', 'legacy', 'profile')`
+  ).run(from);
+  assert.equal(repo.mergeExercises("Zzq Merge Gizmo", "Zzq Survivor Gizmo").ok, true);
+  const ledger = exerciseGroupCorrections(into);
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].from_group, "chest");
+});
+
+test("a legacy group is not moved by a medium profile, a person's profile, or a profile the tables contradict", () => {
+  const medium = lift("Zzq Medium Gizmo");
+  setSource(medium, "triceps", "legacy");
+  writeExerciseProfile(medium, { ...GOOD, confidence: "medium" }, { source: "agent" });
+
+  const handSet = lift("Zzq Handset Gizmo");
+  setSource(handSet, "triceps", "legacy");
+  writeExerciseProfile(handSet, GOOD, { source: "user" });
+
+  const contradicted = lift("Close-Grip Bench Press"); // curated answer: triceps
+  setSource(contradicted, "triceps", "legacy");
+  writeExerciseProfile(contradicted, { ...GOOD, primary_group: "chest" }, { source: "agent" });
+
+  recheckExerciseGroups();
+  assert.equal(getExercise(medium).muscle_group, "triceps");
+  assert.equal(getExercise(handSet).muscle_group, "triceps");
+  assert.equal(getExercise(contradicted).muscle_group, "triceps");
+  assert.equal(getExercise(contradicted).muscle_group_source, "legacy");
+  assert.equal(
+    exerciseGroupCorrections(medium).length + exerciseGroupCorrections(handSet).length + exerciseGroupCorrections(contradicted).length,
+    0,
+  );
+});
+
+test("a legacy group follows a profile the curated tables agree with; a person's group never moves", () => {
+  const agree = lift("Close-Grip Bench Press");
+  setSource(agree, "chest", "legacy"); // a real second mover, so only the profile path corrects it
+  writeExerciseProfile(agree, { ...GOOD, primary_group: "triceps" }, { source: "agent" });
+  const mine = lift("Zzq Mine Gizmo");
+  setSource(mine, "triceps", "user");
+  writeExerciseProfile(mine, GOOD, { source: "agent" });
+  recheckExerciseGroups();
+  assert.equal(getExercise(agree).muscle_group, "triceps");
+  assert.equal(getExercise(mine).muscle_group, "triceps");
+  assert.equal(getExercise(mine).muscle_group_source, "user");
+});

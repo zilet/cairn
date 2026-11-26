@@ -38,6 +38,12 @@ import { localDateISO, addDaysISO } from "../dist/repo/shared.js";
 import { recordDecision } from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
 
+// The engine's OWN rotation rules (vary / introduce: patience, the ledger's counsel, the
+// candidate menu), pinned in isolation from the plateau ladder. With a ladder in the read,
+// a rotation on a lift whose movement the ladder covers defers to the ladder's lever
+// (progression.ts ladderDefersVariation, pinned in ladderWiring.test.js).
+const ENGINE_ONLY = Object.freeze({ ladder: null });
+
 // ---- local seeding (kept in-file so we don't touch the shared _seed.js) ----
 function reset() {
   for (const t of ["daily_session_outcomes", "daily_session_compositions", "logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "garmin_daily_metrics", "garmin_sources", "plan_proposals", "food_notes", "fueling_feedback", "nutrition_targets", "checkins"]) {
@@ -362,7 +368,7 @@ test("vary: a long flat plateau (not grinding) suggests rotating a variation", (
   // Same top load for many sessions across >3 weeks, RIR 2 (not grinding) → flat-long.
   for (const d of [35, 28, 21, 14, 7, 2]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
 
-  const p = nextPrescription("Leg Press");
+  const p = nextPrescription("Leg Press", undefined, ENGINE_ONLY);
   assert.equal(p.action, "vary");
   assert.equal(p.suggested.weight, 400, "load held while a variation is suggested");
 });
@@ -470,7 +476,7 @@ test("a slot the plan just wrote is never rotated for a plateau measured before 
     { exercise: "Triceps Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 50 },
   ]);
   flatPushdownLog();
-  const fresh = nextPrescription("Triceps Rope Pushdown");
+  const fresh = nextPrescription("Triceps Rope Pushdown", undefined, ENGINE_ONLY);
   assert.notEqual(fresh.action, "vary", "freshly authored — it runs before it is judged");
   assert.notEqual(fresh.action, "introduce");
   assert.ok(!fresh.vary_to);
@@ -486,7 +492,7 @@ test("a slot the plan just wrote is never rotated for a plateau measured before 
   ]);
   // (A brain set INCREASE is volume; a set CUT is a new prescription whoever writes it.)
   assert.equal(db.prepare(`SELECT prescribed_at FROM plan_items`).get().prescribed_at, isoDaysAgo(30), "a brain set increase is not a new prescription");
-  assert.equal(nextPrescription("Triceps Rope Pushdown").action, "vary");
+  assert.equal(nextPrescription("Triceps Rope Pushdown", undefined, ENGINE_ONLY).action, "vary");
 
   // Changing the rep range IS a new prescription.
   repo.savePlanDay(4, "Upper", "Upper", [
@@ -512,7 +518,7 @@ test("a rotation never adds a third press to a day that already benches and dips
 
   repo.savePlanDay(4, "Upper", "Upper", [{ exercise: "Triceps Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 50 }]);
   settle();
-  const alone = nextPrescription("Triceps Rope Pushdown");
+  const alone = nextPrescription("Triceps Rope Pushdown", undefined, ENGINE_ONLY);
   assert.equal(alone.action, "vary");
   assert.equal(alone.vary_to, "Close-Grip Bench Press", "with no press on the day, the logged press may lead");
 
@@ -522,7 +528,7 @@ test("a rotation never adds a third press to a day that already benches and dips
     { exercise: "Triceps Rope Pushdown", sets: 3, rep_low: 12, rep_high: 15, target_weight: 50 },
   ]);
   settle();
-  const beside = nextPrescription("Triceps Rope Pushdown");
+  const beside = nextPrescription("Triceps Rope Pushdown", undefined, ENGINE_ONLY);
   assert.equal(beside.action, "vary");
   assert.equal(beside.vary_to, "Cable Overhead Tricep Extension", "the logged non-press variation leads");
   assert.ok(
@@ -1369,11 +1375,11 @@ test("a flat lift on a real cut is holding ground — no variation is forced mid
   planWith(1, { exercise: "Leg Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 400, focus: "Legs" });
   for (const d of [28, 21, 14, 7, 2]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
 
-  const wellFed = nextPrescription("Leg Press");
+  const wellFed = nextPrescription("Leg Press", undefined, ENGINE_ONLY);
   assert.equal(wellFed.action, "vary", "flat this long ordinarily asks for a variation");
 
   seedUnderfueledWeek();
-  const cutting = nextPrescription("Leg Press");
+  const cutting = nextPrescription("Leg Press", undefined, ENGINE_ONLY);
   assert.notEqual(cutting.action, "vary", "a cut buys the movement patience — the same weeks read differently");
   assert.equal(cutting.suggested.weight, 400);
 });
@@ -1659,7 +1665,7 @@ test("ledger counsel: two MISSED verdicts bring the plateau-vary boundary a week
   // Ordinarily (PLATEAU_VARY_WEEKS = 3) that is not long enough to vary yet.
   for (const d of [16, 11, 6, 1]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
 
-  const before = nextPrescription("Leg Press");
+  const before = nextPrescription("Leg Press", undefined, ENGINE_ONLY);
   assert.equal(before.action, "hold", "2 static weeks doesn't clear the ordinary 3-week bar yet");
 
   // Two conclusive MISSED verdicts on this lift's own progression, both inside the
@@ -1668,7 +1674,7 @@ test("ledger counsel: two MISSED verdicts bring the plateau-vary boundary a week
   recordLiftVerdict("Leg Press", "m1", "not_aligned", 40);
   recordLiftVerdict("Leg Press", "m2", "not_aligned", 5);
 
-  const after = nextPrescription("Leg Press");
+  const after = nextPrescription("Leg Press", undefined, ENGINE_ONLY);
   assert.equal(after.action, "vary", "a ledger that keeps missing brings the change forward a week");
   assert.equal(violatesReadingGrammar(after.why), null);
 });
@@ -1680,7 +1686,7 @@ test("ledger counsel: two ALIGNED verdicts buy the plateau extra patience before
   // the ordinary 3-week bar, so the baseline answer is already "vary".
   for (const d of [28, 21, 14, 7, 1]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
 
-  const before = nextPrescription("Leg Press");
+  const before = nextPrescription("Leg Press", undefined, ENGINE_ONLY);
   assert.equal(before.action, "vary", "4 static weeks ordinarily clears the bar");
 
   // Two conclusive ALIGNED verdicts, no misses — the ledger has been honest about
@@ -1688,7 +1694,7 @@ test("ledger counsel: two ALIGNED verdicts buy the plateau extra patience before
   recordLiftVerdict("Leg Press", "a1", "aligned", 40);
   recordLiftVerdict("Leg Press", "a2", "aligned", 5);
 
-  const after = nextPrescription("Leg Press");
+  const after = nextPrescription("Leg Press", undefined, ENGINE_ONLY);
   assert.equal(after.action, "hold", "a ledger that keeps landing buys the lift another clean run");
   assert.match(after.why, /answering|landed|honest/i, "the why credits the lift's own record");
   assert.equal(violatesReadingGrammar(after.why), null);
@@ -1735,7 +1741,7 @@ test("movement risk demotes a flagged vary candidate below an otherwise lower-ra
   makeExercise("Hack Squat", { muscle_group: "quads" });
   const excludeNames = ["Box Squat", "Safety Bar Squat", "Zercher Squat", "Leg Press", "DB Goblet Squat", "Goblet Squat"];
 
-  const before = nextPrescription("Back Squat", undefined, { excludeNames });
+  const before = nextPrescription("Back Squat", undefined, { excludeNames, ...ENGINE_ONLY });
   assert.equal(before.action, "vary");
   assert.equal(before.vary_to, "Front Squat", "unflagged, Front Squat leads the menu");
   assert.deepEqual(
@@ -1747,7 +1753,7 @@ test("movement risk demotes a flagged vary candidate below an otherwise lower-ra
   const event = openSymptomOn("left knee", 60, 10);
   painOnDays(event, "Front Squat", [60, 10]);
 
-  const after = nextPrescription("Back Squat", undefined, { excludeNames });
+  const after = nextPrescription("Back Squat", undefined, { excludeNames, ...ENGINE_ONLY });
   assert.equal(after.action, "vary");
   assert.equal(after.vary_to, "Hack Squat", "the flagged candidate no longer leads the menu");
   assert.deepEqual(
@@ -2009,14 +2015,14 @@ test("push + hold_aggression keeps vary and introduce", () => {
     logSet("Back Squat", isoDaysAgo(d), { weight: w, reps: 8, rir: 2 });
   }
 
-  const steadyVary = planDayProgression(1).find((p) => p.exercise === "Leg Press");
-  const steadyIntro = planDayProgression(2).find((p) => p.exercise === "Back Squat");
+  const steadyVary = planDayProgression(1, ENGINE_ONLY).find((p) => p.exercise === "Leg Press");
+  const steadyIntro = planDayProgression(2, ENGINE_ONLY).find((p) => p.exercise === "Back Squat");
   assert.equal(steadyVary.action, "hold", "ordinarily fueling holds a variation");
   assert.equal(steadyIntro.action, "hold", "ordinarily fueling holds an introduce");
 
   repo.setSettings({ training_drive: "push" });
-  const pushVary = planDayProgression(1).find((p) => p.exercise === "Leg Press");
-  const pushIntro = planDayProgression(2).find((p) => p.exercise === "Back Squat");
+  const pushVary = planDayProgression(1, ENGINE_ONLY).find((p) => p.exercise === "Leg Press");
+  const pushIntro = planDayProgression(2, ENGINE_ONLY).find((p) => p.exercise === "Back Squat");
   assert.equal(pushVary.action, "vary", "push keeps the rotation under a soft fueling hold");
   assert.equal(pushIntro.action, "introduce", "push keeps the fresh movement under a soft fueling hold");
   assert.equal(pushVary.autoregulated, true);
@@ -2530,7 +2536,7 @@ test("planDayProgression: a steady athlete at goal never hears the rotation blam
     ...currentUnderfuelingRead(localDateISO()),
     action: { kind: "recovery_package", kcal_delta: 250, training: "reduce", line: "seeded" },
   };
-  const steady = planDayProgression(1, { forNextSession: true, fuelRead: seededReduce }).find(
+  const steady = planDayProgression(1, { forNextSession: true, fuelRead: seededReduce, ...ENGINE_ONLY }).find(
     (row) => row.exercise === "Leg Press"
   );
   assert.equal(steady.action, "vary", "at the destination the rotation still stands");
@@ -2545,7 +2551,7 @@ test("planDayProgression: a steady athlete at goal never hears the rotation blam
 
   // …and the push athlete still hears their own declaration named.
   repo.setSettings({ training_drive: "push" });
-  const pushed = planDayProgression(1, { forNextSession: true, fuelRead: seededReduce }).find(
+  const pushed = planDayProgression(1, { forNextSession: true, fuelRead: seededReduce, ...ENGINE_ONLY }).find(
     (row) => row.exercise === "Leg Press"
   );
   assert.equal(pushed.action, "vary");

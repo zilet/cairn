@@ -118,13 +118,15 @@ test("a substitution explained by travel is not judged as poor adherence", () =>
     { exercise: "Romanian Deadlift", sets: 3, rep_low: 8, rep_high: 10, target_weight: 185 },
   ]);
   repo.addContextEvent({ kind: "trip", title: "Work trip", start_date: DATE, end_date: DATE });
-  // Trained something else entirely (a hotel-gym machine).
-  repo.logSetByName({ date: DATE, exercise: "Leg Press", weight: 300, reps: 10, day_number: null });
+  // Trained something else entirely (a hotel-gym machine). A leg extension, not a leg
+  // press: a leg press is the squat's own movement unit and would satisfy the squat's slot
+  // (unit-substitution.ts, covered in test/unitSubstitution.test.js).
+  repo.logSetByName({ date: DATE, exercise: "Leg Extension", weight: 120, reps: 10, day_number: null });
   repo.finishSession(prepared.session_id, null);
 
   const outcome = getDailySessionOutcome(DATE);
   assert.ok(outcome);
-  assert.ok(outcome.facts.substituted.includes("Leg Press"));
+  assert.ok(outcome.facts.substituted.includes("Leg Extension"));
   assert.ok(outcome.facts.skipped.includes("Back Squat"));
   assert.ok(outcome.facts.confounders.includes("travel_window"));
   assert.ok(outcome.facts.reason_codes.includes("substituted_movements"));

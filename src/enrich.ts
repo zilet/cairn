@@ -23,6 +23,7 @@ import { recordedClientTimeZone } from "./repo/client-tz.js";
 import { refreshDoctorLoopAttention } from "./repo/doctor-loop.js";
 import { applyExerciseEnrichment, ensureGarminMapping, getExercise, getExerciseDetail, queueExerciseEnrichment, setExerciseEnrichStatus } from "./repo/exercises.js";
 import { exerciseIdsNeedingProfile, exerciseNeedsProfile, sanitizeExerciseProfile, writeExerciseProfile } from "./repo/exercise-profile.js";
+import { recordAgentRun } from "./repo/agent-telemetry.js";
 import { recordGarminExportOutcome } from "./repo/garmin-export-telemetry.js";
 import { getSessionGarminExport } from "./repo/garmin-strength-export.js";
 import { MAX_MARKERS_PER_PANEL, addHealthReview, cleanClinicalFacts, estimateMarkerCandidates, getHealthDocumentRaw, plausibleMarkerValue, reconcileHealthDocumentContextEvents, replaceHealthPanels, setHealthDocEnrichStatus, updateHealthDocFields } from "./repo/health.js";
@@ -1562,13 +1563,34 @@ export async function processExerciseProfileJob(id: number, opts: { timeoutMs?: 
   if (!order.length) return; // no agent: nothing changes, boot offers it again
   let parsed: any = null;
   const agentName = order[0];
+  const started = Date.now();
+  // This call bypasses runAgentWithFallback (and so its run sink); it records its own row, one
+  // per attempt. A busy host (AgentBusyError) is congestion, never a run: nothing is recorded.
+  const record = (ok: boolean, parsedOk: boolean, extra: { status?: string; error_class?: string; error_message?: string; result?: any } = {}) =>
+    recordAgentRun({
+      op: ENRICH_OPS.exercise_profile,
+      agent: agentName,
+      ok,
+      parsed: parsedOk,
+      latency_ms: Date.now() - started,
+      tried_json: false,
+      status: ok ? "ok" : extra.status,
+      error_class: ok ? null : extra.error_class,
+      error_message: ok ? null : extra.error_message,
+      exit_code: extra.result?.code ?? null,
+      model: extra.result?.usage?.model ?? null,
+      input_tokens: extra.result?.usage?.input_tokens ?? null,
+      output_tokens: extra.result?.usage?.output_tokens ?? null,
+      failure_tail: ok ? null : (extra.result?.failure_tail ?? null),
+    });
+  let result: any = null;
   try {
     // ONE attempt with the picked agent, on a short leash, straight through runAgent: no
     // rotation to the other agents, no JSON-repair re-spawn, and none of the shared breaker's
     // bookkeeping. This is housekeeping, so a prompt a provider dislikes must not trip the
     // breaker real work depends on, nor hold a spawn permit for minutes. A failure leaves the
     // lift without a row and a later boot offers it again.
-    const result = await runAgent(agentName, buildExerciseProfilePrompt(getExerciseDetail(ex.name)), {
+    result = await runAgent(agentName, buildExerciseProfilePrompt(getExerciseDetail(ex.name)), {
       timeoutMs: opts.timeoutMs ?? PROFILE_TIMEOUT_MS,
       profile: executionProfileForTask("enrich"),
       schema: EXERCISE_PROFILE_SCHEMA,
@@ -1578,14 +1600,24 @@ export async function processExerciseProfileJob(id: number, opts: { timeoutMs?: 
   } catch (e: any) {
     // Congestion, never a bad job: the drain puts it back and rests the lane.
     if (isAgentBusyError(e)) throw e;
+    const timedOut = /timed out/i.test(String(e?.message || ""));
+    record(false, false, {
+      status: timedOut ? "timeout" : "error",
+      error_class: timedOut ? "timeout" : "process_error",
+      error_message: String(e?.message || "agent attempt failed").slice(0, 200),
+    });
     log.warn(`[enrich] exercise_profile#${id}: the agent did not answer.`);
     return;
   }
-  if (!parsed || typeof parsed !== "object") return;
+  if (!parsed || typeof parsed !== "object") {
+    record(false, false, { status: "invalid_output", error_class: "invalid_json", error_message: "reply had no parseable JSON", result });
+    return;
+  }
   // The reply may carry the profile at the top level (this prompt) or under `profile` (the
   // 'exercise' reply's shape); either is read the same way.
   const raw = parsed.profile && typeof parsed.profile === "object" ? parsed.profile : parsed;
   writeExerciseProfile(id, raw, { source: "agent", agent: agentName });
+  record(true, true, { result });
 }
 
 /** How many lifts one boot queues. The rest wait for a later boot: the library is never profiled in one burst. */

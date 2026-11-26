@@ -97,8 +97,8 @@ import {
   bouncedOffLoadStep,
   coarseLoadStep,
   isIsolationLift,
-  lastAppliedRepRangeMove,
   movedRepRange,
+  repRangeMoveSpent,
 } from "./lift-response.js";
 export { painAreaLoadsExercise } from "./pain-relevance.js";
 import {
@@ -146,6 +146,15 @@ import { type LiftState, getProgramState, LIFT_CURRENT_WINDOW_DAYS } from "./pro
 import { coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
 import { addDaysISO, daysBetweenISO, localDateISO, localDayOfStamp, round2_5 } from "./shared.js";
 import { sessionCountsTowardLiftTrajectory } from "./lift-comparability.js";
+// The plateau ladder (a cycle: unit-plateau reads nextPrescription), read at call time only.
+import {
+  ladderRungForLift,
+  type UnitPlateauLadder,
+  type UnitPlateauRung,
+  unitLadderInFlight,
+  unitPlateauLadder,
+} from "./unit-plateau.js";
+import { liftCallStands, unitOfLift } from "./capability-consumers.js";
 import { USER_VETO_SQL } from "./brain-decisions.js";
 import { easedLoad, isIsolationGroup, loadIncrement, STEP_CEIL_COMPOUND, STEP_CEIL_ISOLATION } from "./load-grid.js";
 import { supportWorkRead } from "./support-work.js";
@@ -2036,6 +2045,30 @@ export interface PrescriptionOpts {
   // of two. Read for the day when absent.
   pushStance?: boolean | null;
   slotStamps?: Map<number, string | null> | null; // a pass's one read of plan_items.prescribed_at (planSlotStamps)
+  // The plateau ladder a vary / introduce defers to (ladderDefersVariation). Absent: the
+  // day's ladder is read when, and only when, the engine suggests a rotation. null: no
+  // ladder, so the engine's own suggestion stands (the seam that pins the engine's own
+  // rotation rules in isolation). A function: the pass's own lazy read (planDayProgression
+  // hands one in, so a pass over many lifts reads the ladder at most once, even outside a
+  // request where nothing is memoized).
+  ladder?: UnitPlateauLadder | null | (() => UnitPlateauLadder | null);
+}
+
+/** A ladder read that runs at most once, and only if asked (one per pass, never one per lift). */
+export function onceLadder(read: () => UnitPlateauLadder | null): () => UnitPlateauLadder | null {
+  let memo: { value: UnitPlateauLadder | null } | null = null;
+  return () => {
+    if (!memo) {
+      let value: UnitPlateauLadder | null = null;
+      try {
+        value = read();
+      } catch {
+        value = null;
+      }
+      memo = { value };
+    }
+    return memo.value;
+  };
 }
 
 // The athlete's own standing declaration. It buys a handful of things below — a
@@ -2155,7 +2188,56 @@ export function nextPrescription(
   };
   if (mode === "timed")
     return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
-  return repsPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
+  return ladderDefersVariation(
+    repsPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx),
+    group,
+    ladderReaderFor(opts, date)
+  );
+}
+
+// The ladder a lift's rotation defers to: the caller's (a value, null, or its pass's lazy
+// read), else the read day's own (request-memoized; outside a request a caller walking many
+// lifts hands in `onceLadder`).
+function ladderReaderFor(opts: PrescriptionOpts | undefined, date: string): () => UnitPlateauLadder | null {
+  if (!opts || !("ladder" in opts)) return () => unitPlateauLadder(date);
+  const given = opts.ladder;
+  if (typeof given === "function") return given;
+  return () => given ?? null;
+}
+
+/**
+ * THE ROTATION IS THE LADDER'S. A plateaued movement has ONE answer to "which lever next"
+ * (unit-plateau.ts): the rep range at the held load, then effort, then a set, and only then
+ * a variation — at a block boundary, a compound anchor at most once a block. The engine's
+ * own `vary` (flat long enough) and `introduce` (a long-held lift, before staleness) are the
+ * same rotation asked lift by lift, so for a lift whose movement unit the ladder covers the
+ * engine's suggestion stands only when the ladder's lever for that unit IS `variation`;
+ * otherwise the card holds at the very load the suggestion already held (a rotation never
+ * moves load), without the menu, and says the ladder's own reason. No load decision changes:
+ * a deload, a step, a rep step and the repeat-deload escalation (`escalated:"variation"`,
+ * the answer to a deload that keeps failing, not to a plateau) are untouched. The ladder
+ * does not cover a lift whose unit is off the plan, a timed hold (progressed by time, never
+ * by the ladder), or any lift when the ladder cannot be read: the engine's suggestion then
+ * stands exactly as before. Inside a ladder read (its `engineMoving` asks this engine, and
+ * ignores vary/introduce) nothing is deferred, so the recursion stops there.
+ */
+function ladderDefersVariation(
+  p: Prescription,
+  group: string | null,
+  readLadder: () => UnitPlateauLadder | null
+): Prescription {
+  if (p.action !== "vary" && p.action !== "introduce") return p;
+  if (p.escalated === "variation") return p;
+  if (unitLadderInFlight()) return p;
+  let rung: UnitPlateauRung | null = null;
+  try {
+    rung = ladderRungForLift(readLadder(), p.exercise, group);
+  } catch {
+    rung = null;
+  }
+  if (!rung || rung.code === "timed" || rung.lever === "variation") return p;
+  const { vary_to: _varyTo, vary_options: _varyOptions, ...held } = p;
+  return { ...held, action: "hold", why: rung.reason };
 }
 
 // Above this many "reps" on a carry or hold, the number is seconds, not reps.
@@ -2610,14 +2692,13 @@ function repsPrescription(
   let rangeLedger: boolean | null = null;
   const rangeMoveUnspent = (): boolean => {
     if (rangeLedger != null) return rangeLedger;
-    const prior = lastAppliedRepRangeMove(name, date);
-    // Spent when the moved range still stands, or when the athlete undid it: an Undo
-    // restores the old range, and reading that as "never moved" re-proposed the same
-    // move at every boundary.
-    rangeLedger = !(
-      prior != null &&
-      (prior.vetoed || prior.rep_low == null || (repLow as number) >= prior.rep_low)
-    );
+    // ONE rule with the plateau ladder (lift-response.ts `repRangeMoveSpent`): spent when
+    // the moved range still stands, or when the athlete undid it — an Undo restores the old
+    // range, and reading that as "never moved" re-proposed the same move at every boundary.
+    // The engine's doors have no plateau run of their own to scope a no to, so a no spends
+    // the move for good here (`plateauSince` null), exactly as this read always did; the
+    // ladder passes its plateau's first session and lets a no from an EARLIER plateau lapse.
+    rangeLedger = !repRangeMoveSpent(name, repLow ?? null, null, date);
     return rangeLedger;
   };
   // Whether the move stands in for an earned step (braked like one) or for a grind's deload.
@@ -3847,9 +3928,22 @@ function ex_name(name: string): string {
 // runner loop owns those). Powers Today's session card + the apply path. Each
 // row carries its plan_item_id so a "apply these" build can route through
 // propose→apply by day_number.
+export interface PlanDayProgressionOpts {
+  forNextSession?: boolean;
+  fuelRead?: UnderfuelingRead;
+  readDate?: string;
+  /**
+   * The plateau ladder every lift's rotation defers to (PrescriptionOpts.ladder); absent
+   * reads the read day's, at most once for the pass. A FUNCTION stands for that same
+   * read day's ladder, read lazily and shared by a caller walking several plan days
+   * (`onceLadder`), so such a pass is memoized exactly like the bare form.
+   */
+  ladder?: UnitPlateauLadder | null | (() => UnitPlateauLadder | null);
+}
+
 export function planDayProgression(
   dayNumber: number,
-  opts: { forNextSession?: boolean; fuelRead?: UnderfuelingRead; readDate?: string } = {}
+  opts: PlanDayProgressionOpts = {}
 ): Prescription[] {
   // Request-memoized (request-memo.ts): Today's agenda, the coach context and the
   // adjustments card each walk every plan day through this pass. Keyed by every input:
@@ -3857,8 +3951,8 @@ export function planDayProgression(
   // the pass is for the next session, the day the read is for, and the local date the
   // pass's undated reads (autoregulation, acute gates, the personal-response model)
   // default to. An injected fuel read is an object the key cannot name, so that pass
-  // always computes.
-  if (opts.fuelRead == null) {
+  // always computes, and so does a pass handed its own ladder.
+  if (opts.fuelRead == null && (!("ladder" in opts) || typeof opts.ladder === "function")) {
     const readDay = /^\d{4}-\d{2}-\d{2}$/.test(String(opts.readDate ?? "")) ? String(opts.readDate) : null;
     const key = memoKey([dayNumber, opts.forNextSession ? 1 : 0, readDay, localDateISO()]);
     if (key != null)
@@ -3877,7 +3971,7 @@ function planDayProgressionRead(
   // pressure, near-goal, calibration, light week, slot authorship), so a read computed
   // for day D both words and reasons as of D whenever it runs; omit it and both key on
   // today.
-  opts: { forNextSession?: boolean; fuelRead?: UnderfuelingRead; readDate?: string } = {}
+  opts: PlanDayProgressionOpts = {}
 ): Prescription[] {
   const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
   if (!day) return [];
@@ -3959,6 +4053,12 @@ function planDayProgressionRead(
   };
   // When every slot was prescribed — ONE read for the pass (prescription-authorship.ts).
   const slotStamps = planSlotStamps();
+  // The plateau ladder a vary / introduce defers to: at most ONE read for the pass, and
+  // only if some lift's engine suggests a rotation. Outside a request (the scheduler's
+  // passes) nothing is memoized, so a per-lift read would recompute the ladder — a
+  // capability read and an engine pass per plan unit — once per lift.
+  const ladder: PrescriptionOpts["ladder"] =
+    "ladder" in opts ? (opts.ladder ?? null) : onceLadder(() => unitPlateauLadder(readDay));
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
@@ -3979,6 +4079,7 @@ function planDayProgressionRead(
       drive,
       pushStance,
       slotStamps,
+      ladder,
     });
     if (p) {
       const protectedPrescription = applyFuelProtection(p, fuelProtection, voiceDate, drive, atNearGoal);
@@ -4496,7 +4597,7 @@ function planTargetsForDay(day: number): Map<string, number | null> {
 // nothing to propose.
 export function buildProgressionProposal(
   day: number,
-  opts: { forNextSession?: boolean } = {}
+  opts: Pick<PlanDayProgressionOpts, "forNextSession" | "ladder"> = {}
 ): { ok: false; error: string } | { ok: true; proposal: any } {
   if (!Number.isFinite(day)) return { ok: false, error: "day required" };
   const prescriptions = planDayProgression(day, opts);
@@ -4989,8 +5090,10 @@ function computeProgramAdjustments(
   const deloads: ProgramAdjustment[] = [];
   const varies: ProgramAdjustment[] = [];
   const overloads: ProgramAdjustment[] = [];
+  // One ladder read for the whole walk over the plan days (never one per day or per lift).
+  const ladder = onceLadder(() => unitPlateauLadder(localDateISO()));
   for (const d of days) {
-    for (const p of planDayProgression(d.day_number)) {
+    for (const p of planDayProgression(d.day_number, { ladder })) {
       if (p.action === "deload")
         deloads.push({ kind: "deload", title: `Deload ${p.exercise}`, why: p.why, exercise: p.exercise });
       else if (p.action === "vary")
@@ -5310,13 +5413,29 @@ export function programEvolutionTrigger(
   //     lift ON the plan arms it: a lift he is not doing is not the plan's to change, and
   //     a resting one is out of the rotation (program-state.ts `in_plan`/`resting`; an
   //     injected state that predates the fields reads as on the plan).
+  //     And the MOVEMENT decides, the lift is evidence (capability-consumers.ts
+  //     `liftCallStands`): a stalled variant inside a climbing unit, or a unit holding
+  //     through the cut, a run build or a lighter week, is no plateau for the plan to
+  //     change, and two stalled variants of one movement are ONE reason (the first named,
+  //     in name order). With no capability read on the state (an injected legacy shape, a
+  //     failed read) the lift's own call stands as it always did.
+  const cap = ps?.capability ?? null;
+  const unitSeen = new Set<string>();
   const wantsVary = lifts
     .filter((l: any) => l?.in_plan !== false && l?.resting !== true)
     .filter((l: any) => l?.suggested_action === "vary" || l?.status === "regressing")
+    .filter((l: any) => liftCallStands(cap, String(l?.exercise ?? ""), l?.exercise_id ?? null))
     .map((l: any) => l?.exercise)
     .filter(Boolean)
     .map((s: any) => String(s))
-    .sort();
+    .sort()
+    .filter((name: string) => {
+      const unit = unitOfLift(cap, name);
+      if (!unit) return true;
+      if (unitSeen.has(unit.key)) return false;
+      unitSeen.add(unit.key);
+      return true;
+    });
   if (wantsVary.length) {
     reasons.push(
       wantsVary.length === 1

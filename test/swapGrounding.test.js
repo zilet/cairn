@@ -300,11 +300,13 @@ test("the added-not-swapped path takes a related-lift idea, and keeps the cue wi
 
   assert.equal(applySwapSmart("Hack Squat", "Front Squat").mode, "added");
   const front = itemOn(1, "Front Squat");
-  assert.equal(front.target_weight, null, "the append path stores no estimate either");
-  assert.match(String(front.note), /Back Squat/, "the note names where the idea came from");
+  // Same movement unit (variant-start.ts): the unit's start IS stored — 0.75 of the back
+  // squat under the 0.9 first-session factor, rounded down — and the slot is untested.
+  assert.equal(front.target_weight, 135, "the unit start: 200 x 0.75 x 0.9, rounded down");
+  assert.match(String(front.note), /Back Squat/, "the note names where the start came from");
   const rx = nextPrescription("Front Squat");
-  assert.equal(rx.suggested.weight, 150, "0.75 of the back squat, rounded down, live only");
-  assert.equal(rx.starting_idea, true);
+  assert.equal(rx.suggested.weight, 135, "the stored start stands until it is lifted");
+  assert.ok(!rx.starting_idea, "a stored start is not a live idea");
 
   // A movement with neither direct nor related history keeps the baseline cue.
   repo.upsertExercise({ name: "Leg Extension", muscle_group: "quads" });

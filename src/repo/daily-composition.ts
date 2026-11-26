@@ -34,6 +34,8 @@ import { weeklyDoseSoftLine } from "./weekly-dose-ledger.js";
 import { nextLoadStep } from "./progression.js";
 import { easedLoad } from "./load-grid.js";
 import { stressBudgetItemNotes } from "./stress-budget.js";
+import { standingEveSetCap, standingEveTrimKeys } from "./composition-eve.js";
+import { type SetQualityLifts, setQualityNoteFor } from "./composition-set-quality.js";
 import { isStatedRunDay } from "./profile.js";
 import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 import { type SaturatedSubstitution, substituteSaturatedPlanItems } from "./saturated-substitution.js";
@@ -106,6 +108,14 @@ export interface ComposeSessionOptions {
   // down to one each — every trim recorded (`day_set_budget`) and said on the card —
   // never an item. An agent-authored session keeps the plain clamp.
   planSourced?: boolean;
+  // The plateau ladder's `set_quality` lever, PRE-COMPUTED by the caller
+  // (composition-set-quality.ts `setQualityLiftsFromLadder(unitPlateauLadder(date))`):
+  // the plan lifts whose unit's next lever is effort. At most one card item carries one
+  // short note for it (take the working sets closer to the limit, inside the rep range) —
+  // never a load or set change. Taken as an input, never read here: the ladder reads the
+  // capability read and the progression engine, a meaningful cost on the Today path and a
+  // call path back into today's composition. Omitted = no note.
+  setQuality?: SetQualityLifts | null;
 }
 
 function volumeCap(envelope: DailyDecisionEnvelope): number {
@@ -1303,6 +1313,10 @@ export function normalizeComposedSession(
     envelope.stress?.load_held === true && typeof envelope.stress.hold_exercise === "string"
       ? envelope.stress.hold_exercise.trim().toLowerCase()
       : null;
+  // The STANDING eve is item-scoped (stress-budget.ts `trim_exercises`): inside a group
+  // only it reduced, only the named accessories lose a set; every other item there (the
+  // RDL beside the leg curl) is passed over like the anchor. null = group-level (in-build).
+  const standingEveTrim = standingEveTrimKeys(envelope.stress);
   const saturatedGroups = new Set(
     (Array.isArray(envelope.muscles.saturated) ? envelope.muscles.saturated : []).map(
       (g) => canonicalGroup(g) ?? String(g).toLowerCase()
@@ -1395,10 +1409,10 @@ export function normalizeComposedSession(
       continue;
     }
     const stressHeldAnchor =
-      stressHoldExercise != null &&
-      exercise.trim().toLowerCase() === stressHoldExercise &&
       !!group &&
-      loadHeldGroups.has(canonicalGroup(group) ?? group);
+      loadHeldGroups.has(canonicalGroup(group) ?? group) &&
+      ((stressHoldExercise != null && exercise.trim().toLowerCase() === stressHoldExercise) ||
+        (standingEveTrim != null && !standingEveTrim.has(normalizedExerciseKey(exercise))));
     if (group) groupByExercise.set(exercise.toLowerCase(), group);
     if (group && !stressHeldAnchor && reducedGroups.has(canonicalGroup(group) ?? group)) {
       reducedExercises.add(exercise.toLowerCase());
@@ -1565,13 +1579,20 @@ export function normalizeComposedSession(
     const isReduced = reducedExercises.has(String(next.exercise ?? "").toLowerCase());
     const stressOnly = isReduced && stressSoleExercises.has(String(next.exercise ?? "").toLowerCase());
     const authorizedSets = Math.max(1, Number(next.sets) || requestedSets);
+    // A load-held area (the key-run eve) loses sets only; its weight stays.
+    const loadHeld = loadHeldExercises.has(String(next.exercise ?? "").toLowerCase());
+    // The STANDING eve takes exactly one set off each accessory it named (never the
+    // reduced cap's two-set clamp), and never off a lift the athlete asked for today.
+    const standingEveItem = standingEveTrim != null && isReduced && stressOnly && loadHeld && !requestedToday;
     // A lift the athlete asked for today is not held to the day's per-item cap; a
     // reduced AREA still is — that is the body's answer, not the day's posture.
-    const setCapForItem = isReduced
-      ? Math.min(itemSetCap, REDUCED_ITEM_SET_CAP)
-      : requestedToday
-        ? authorizedSets
-        : itemSetCap;
+    const setCapForItem = standingEveItem
+      ? Math.min(itemSetCap, standingEveSetCap(authorizedSets))
+      : isReduced
+        ? Math.min(itemSetCap, REDUCED_ITEM_SET_CAP)
+        : requestedToday
+          ? authorizedSets
+          : itemSetCap;
     // Plan-sourced: the day budget is fitted after this loop (fitPlanDaySetBudget). A lift
     // asked for today is never trimmed by the running budget either (it still spends it).
     const boundedSets =
@@ -1583,6 +1604,9 @@ export function normalizeComposedSession(
       continue;
     }
     if (boundedSets !== requestedSets || boundedSets !== authorizedSets) changed = true;
+    // Recorded like every other trim (`day_set_budget`): what the standing eve took off.
+    if (standingEveItem && boundedSets < authorizedSets)
+      rejected.push({ exercise: String(next.exercise ?? ""), reason: "key_run_eve", sets_from: authorizedSets, sets_to: boundedSets });
     next.sets = boundedSets;
     if (!planSourced) remainingSets = Math.max(0, remainingSets - boundedSets);
 
@@ -1598,7 +1622,6 @@ export function normalizeComposedSession(
     }
     // A reduced area never gets a heavier target than the day already allows. A
     // load-held area (the key-run eve) loses sets only; its weight stays.
-    const loadHeld = loadHeldExercises.has(String(next.exercise ?? "").toLowerCase());
     if (isReduced && !loadHeld) intensityFactor = Math.min(intensityFactor, REDUCED_INTENSITY_FACTOR);
     const hold = candidate?.action === "hold" || envelope.caps.intensity === "hold";
     // A stand-in is exempt from the hold clamp ONLY when its load is proven —
@@ -1688,7 +1711,7 @@ export function normalizeComposedSession(
     } else if (loadHeld && stressOnly && boundedSets < authorizedSets && !isPrepCompositionItem(next)) {
       // The key-run eve's trim: fewer sets, the prescription's weight — said as such,
       // in place of the plain hold line the candidate's reduced-group hold would print.
-      const eveNotes = stressBudgetItemNotes(envelope.stress?.code);
+      const eveNotes = stressBudgetItemNotes(envelope.stress?.code, standingEveItem ? "standing" : undefined);
       if (eveNotes)
         next.note = adaptationNote(next.note, compositionNoteFor(eveNotes, envelope.date, "stress", next.exercise));
     } else if (hold && !itemAlreadyHasProgressionHoldWhy(candidate) && !isPrepCompositionItem(next)) {
@@ -1938,6 +1961,10 @@ export function normalizeComposedSession(
   // …and the dose the same way: after pairing, which still seats today's gap groups off
   // `dose.gaps`, the envelope keeps only the fills this card carries.
   reconcileEnvelopeDose(envelope, new Set(dosed.landed));
+  // The plateau ladder's effort lever (composition-set-quality.ts): one short note on at
+  // most one item, never a load or a set change — so it never marks the card `capped`.
+  const setQuality = setQualityNoteFor(finalItems, { envelope, lifts: opts.setQuality, reducedExercises });
+  if (setQuality) setQuality.item.note = adaptationNote(setQuality.item.note, setQuality.text);
   // What the superset rules took apart: at the payload boundary (an author's grouping)
   // and on the final card (a grouping today's clamps reshaped), in that order.
   const unpaired = [...(base.unpaired ?? []), ...(paired.unpaired ?? [])];
@@ -2163,7 +2190,7 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
 
 export function deterministicComposedSession(
   envelope: DailyDecisionEnvelope,
-  opts: Pick<ComposeSessionOptions, "planSnapshot"> = {}
+  opts: Pick<ComposeSessionOptions, "planSnapshot" | "setQuality"> = {}
 ): ComposedSession {
   // ---- a stated run day carries no lifting card ----
   // The run is the day's work and it lives on the Endurance plan (weeklyRunPlan /
@@ -2207,6 +2234,7 @@ export function deterministicComposedSession(
     substituteSaturated: true,
     planSnapshot: opts.planSnapshot === true,
     planSourced: true,
+    ...(opts.setQuality ? { setQuality: opts.setQuality } : {}),
   });
   // The raw payload is built from safe template/plan items, so it always
   // normalizes; this null-guard is defensive only.

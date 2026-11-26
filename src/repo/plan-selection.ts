@@ -22,6 +22,7 @@ import { loadAtOrAbove } from "./outcome-comparability.js";
 import { type EnduranceScheduleKind, getEnduranceSchedule } from "./profile.js";
 import { programBalance } from "./progression.js";
 import { liftDows } from "./strength-schedule.js";
+import { nearKeyRun } from "./key-run-proximity.js";
 import { registerHybridForwardProjection } from "./hybrid-forward-projection.js";
 import { daysBetweenISO, joinList, localDateISO } from "./shared.js";
 import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
@@ -586,10 +587,9 @@ export interface KeyRunSwap {
   to_dow: number;
 }
 
-/** Whether `dow` is a key-run day or the day either side of one (the week wraps). */
-function nearKeyRun(dow: number, keyRuns: ReadonlySet<number>): boolean {
-  return keyRuns.has(dow) || keyRuns.has((dow + 1) % 7) || keyRuns.has((dow + 6) % 7);
-}
+// Whether `dow` is a key-run day or the day either side of one (the week wraps): the ONE
+// rule (key-run-proximity.ts) the week-layout read's `lower_lift_placement` also reads, so
+// the read never calls preferred a day this trade would move.
 
 /**
  * Trade each heavy-lower day the deal laid near a key run onto the nearest open,

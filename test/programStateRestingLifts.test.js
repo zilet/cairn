@@ -13,10 +13,12 @@ import {
   AWAITING_EXPOSURE_WHY_VARIANTS,
   RESTING_LIFT_WHY_VARIANTS,
   NOTHING_CURRENT_HEADLINE_VARIANTS,
+  ladderCallLine,
   liftRotation,
   logConfirmedFatigue,
   regressionWitnessCount,
 } from "../dist/repo/program-state.js";
+import { unitPlateauLadder } from "../dist/repo/unit-plateau.js";
 import { energyDeficiencyArms } from "../dist/repo/energy-deficiency.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import { localDateISO } from "../dist/repo/shared.js";
@@ -85,7 +87,8 @@ test("a plateaued lift off the plan, last trained 60 days ago, is resting and ma
 
   // Not in the headline's tally, not in the adaptations list.
   assert.doesNotMatch(st.headline, /stalled|slipping/);
-  assert.match(st.headline, /1 lift climbing/);
+  // The tally counts movement units on the plan (the capability read), never lifts.
+  assert.match(st.headline, /1 movement climbing/);
   assert.ok(!st.adaptations_due.some((a) => /Leg Extension/.test(a)), st.adaptations_due.join(" | "));
 
   // Not an evolution trigger.
@@ -108,7 +111,8 @@ test("resting lifts count in neither the numerator nor the denominator of the un
   const arm = energyDeficiencyArms(REF).find((a) => a.key === "lift_stall");
   assert.ok(arm);
   assert.equal(arm.verdict, "not_met");
-  assert.deepEqual(arm.evidence_keys, [`program_state.lifts:${REF}:stalled=0/1`]);
+  // Counted over movement units on the plan: the climbing flat press is the one graded unit.
+  assert.deepEqual(arm.evidence_keys, [`capability.units:${REF}:stalled=0/1:slipping=0`]);
 });
 
 test("two resting slides never trip the deload's fatigue arm", () => {
@@ -159,8 +163,16 @@ test("the same plateau ON the plan and trained last week is graded exactly as be
     sessions,
   });
   assert.deepEqual(graded(ext), graded(offPlan), "the plan read changes the rotation fields, never the grade");
-  assert.match(st.headline, /1 stalled/);
-  assert.ok(st.adaptations_due.some((a) => /Rotate a variation for Leg Extension/.test(a)));
+  // At most one entry per movement unit, and its lever is the plateau ladder's
+  // (unit-plateau.ts), never the lift's own stall tell: here the engine already has the
+  // lift's next step lined up (one set capped the range), so the ladder waits and the list
+  // says nothing about it rather than a second opinion.
+  assert.match(st.headline, /1 holding/);
+  const rung = unitPlateauLadder(REF).units.find((u) => u.plan_lift?.exercise === "Leg Extension");
+  const expected = ladderCallLine(rung ?? null, "leg extension", "Leg Extension");
+  const lines = st.adaptations_due.filter((a) => /leg extension/i.test(a));
+  assert.deepEqual(lines, expected ? [expected] : [], st.adaptations_due.join(" | "));
+  assert.ok(!st.adaptations_due.some((a) => /Unstick|Deload your/.test(a)), st.adaptations_due.join(" | "));
 
   const trig = repo.programEvolutionTrigger(REF, { balance: { due: [], over: [] }, testWeek: { due: false }, enduranceTests: [] });
   assert.match(trig.signature, /vary:Leg Extension/, "a lift on the plan still arms the trigger");
@@ -210,23 +222,84 @@ test("a plan that cannot be read fails toward silence: a stale lift rests, a cur
   assert.deepEqual(liftRotation(null, null, REF), { in_plan: false, resting: true, stale: true });
 });
 
-test("two regressing variants of one region are one fatigue witness; two regions are two", () => {
+test("the fatigue witnesses are movement units when the read is in hand: two compound units on the plan slipping", () => {
+  // The lift grouping folds variants: the fallback rule when no read is in hand.
   const lift = (exercise, family_key) => ({ exercise, family_key, status: "regressing", resting: false, muscle_group: null });
   const pressdowns = [lift("Rope Triceps Pushdown", "rope triceps pushdown"), lift("Straight Bar Pushdown", "straight bar pushdown")];
   assert.equal(regressionWitnessCount(pressdowns), 1);
-  assert.equal(logConfirmedFatigue(REF, pressdowns).high, false, "two noisy pressdowns are one slide");
 
-  const family = [lift("Barbell Back Squat", "back squat"), lift("Back Squat (Belt)", "back squat")];
-  assert.equal(regressionWitnessCount(family), 1, "one movement family is one witness");
+  // With a usable read, lifts do not count: the movements decide.
+  const unit = (key, extra = {}) => ({
+    key,
+    label: key,
+    compound: true,
+    in_plan: true,
+    verdict: "slipping",
+    qualifiers: [],
+    line: "",
+    lifts: [],
+    plan_lift: null,
+    exposures: 6,
+    ...extra,
+  });
+  const cap = (units) => ({ available: true, overall: null, units, muscles: [] });
+  // No read in hand: the lift rule answers — two variants of one movement are one witness…
+  assert.equal(logConfirmedFatigue(REF, pressdowns, null).high, false, "no read: variants fold into one witness");
+  // …and two independent regressing lifts confirm it, so a failed read never switches the arm off.
+  const independent = [lift("Back Squat", "back squat"), lift("Bench Press", "bench press")];
+  const fallback = logConfirmedFatigue(REF, independent, null);
+  assert.equal(fallback.high, true, "no read: two independent regressing lifts witness");
+  assert.ok(fallback.reasons.some((r) => /lifts are drifting down/.test(r)));
+  assert.equal(logConfirmedFatigue(REF, independent, { available: false, overall: null, units: [], muscles: [] }).high, true);
+  assert.equal(
+    logConfirmedFatigue(REF, independent.map((l) => ({ ...l, resting: true })), null).high,
+    false,
+    "a resting lift is never a witness, read or no read"
+  );
+  // A usable read decides by movements: the same lifts beside a read with no slide witness nothing.
+  assert.equal(logConfirmedFatigue(REF, independent, cap([unit("squat", { verdict: "holding" })])).high, false);
 
-  const distinct = [lift("Leg Extension", "leg extension"), lift("Lateral Raise", "lateral raise")];
-  assert.equal(regressionWitnessCount(distinct), 2);
-  const read = logConfirmedFatigue(REF, distinct);
+  const pair = cap([unit("squat"), unit("horizontal-push:flat")]);
+  const read = logConfirmedFatigue(REF, [], pair);
   assert.equal(read.high, true);
   assert.ok(read.reasons.some((r) => /drifting down/.test(r)));
 
-  // A resting one never counts toward the pair.
-  assert.equal(logConfirmedFatigue(REF, [distinct[0], { ...distinct[1], resting: true }]).high, false);
+  assert.equal(logConfirmedFatigue(REF, [], cap([unit("squat")])).high, false, "one easing movement is noise");
+  assert.equal(
+    logConfirmedFatigue(REF, [], cap([unit("squat", { qualifiers: ["run_build"] }), unit("horizontal-push:flat")])).high,
+    false,
+    "a squat easing under a run build is the interference effect, not fatigue"
+  );
+  assert.equal(
+    logConfirmedFatigue(REF, [], cap([unit("squat", { qualifiers: ["cut"] }), unit("hinge", { qualifiers: ["cut"] })])).high,
+    true,
+    "two main movements sliding in a cut is exactly when a lighter week is right"
+  );
+  assert.equal(
+    logConfirmedFatigue(REF, [], cap([unit("squat", { qualifiers: ["cut", "recovery"] }), unit("hinge")])).high,
+    false,
+    "a lighter week running explains its slide, cut or no cut"
+  );
+  assert.equal(
+    logConfirmedFatigue(REF, [], cap([unit("horizontal-push:flat"), unit("vertical-pull")])).high,
+    true,
+    "upper-body movements slipping during a run build still witness (the read stamps run_build on legs only)"
+  );
+  assert.equal(
+    logConfirmedFatigue(REF, [], cap([unit("squat"), unit("triceps:pushdown", { compound: false })])).high,
+    false,
+    "an isolation unit is no fatigue witness"
+  );
+  assert.equal(
+    logConfirmedFatigue(REF, [], cap([unit("squat"), unit("hinge", { in_plan: false })])).high,
+    false,
+    "an off-plan movement is no witness"
+  );
+  assert.equal(
+    logConfirmedFatigue(REF, [], { ...pair, available: false }).high,
+    false,
+    "an unavailable read with no lift evidence witnesses nothing"
+  );
 });
 
 test("every resting and awaiting phrasing holds the reading grammar", () => {
@@ -244,7 +317,7 @@ test("the coach and program-evolution prompts never name a resting lift in an ac
 
   const actOn = (prompt) => {
     const lines = prompt.split("\n");
-    const needsAt = lines.findIndex((l) => /^LIFTS THAT NEED A CALL/.test(l));
+    const needsAt = lines.findIndex((l) => /^(LIFTS|MOVEMENTS) THAT NEED A CALL/.test(l));
     const needs = [];
     if (needsAt >= 0) for (let i = needsAt + 1; i < lines.length && /^\s+- /.test(lines[i]); i++) needs.push(lines[i]);
     const variations = lines.filter((l) => /^- .+ → /.test(l));
@@ -261,7 +334,11 @@ test("the coach and program-evolution prompts never name a resting lift in an ac
       assert.doesNotMatch(line, /Leg Extension/, `${site}: ${line}`);
     }
     assert.doesNotMatch(prompt, /Rotate a variation for Leg Extension|Leg Extension has stalled/, site);
-    assert.ok(needs.some((l) => /Bench Press \[plateaued\]/.test(l)), `${site} still names the current stall`);
+    // Judged per movement: the flat press is holding, its lift on the plan is the evidence.
+    assert.ok(
+      needs.some((l) => /flat press \[holding\] \(Bench Press\)/.test(l)),
+      `${site} still names the current stall: ${needs.join(" | ")}`
+    );
   }
   const evo = buildProgramEvolutionPrompt();
   assert.match(evo, /Bench Press →/, "the current stall still gets its variation candidates");

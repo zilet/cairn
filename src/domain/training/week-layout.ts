@@ -22,6 +22,7 @@ import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import type { FlexibleTrainingAgenda } from "../../repo/flexible-training-agenda.js";
 import type { WeeklyRunPlan } from "../../repo/run-progression.js";
 import { localDateISO } from "../../repo/shared.js";
+import { type KeyRunRelation, keyRunRelation } from "../../repo/key-run-proximity.js";
 import { heavyLowerDayLoads, planDayStrengthGroups, type HeavyLowerDayLoad } from "../../repo/training-read.js";
 
 // Type-only imports above on purpose: run-progression and flexible-training-agenda
@@ -90,6 +91,32 @@ export interface WeekLayoutRead {
    * never plan items (migration 110), so the engine's week leads and the agenda follows.
    */
   source: "run_plan" | "agenda" | "none";
+  /**
+   * "Hard days hard": where the week's heaviest lower lift day sits against its key
+   * runs — a READ, never an action (lowerLiftPlacement). null when the week has no
+   * heavy lower day or no quality/long run to read it against.
+   */
+  lower_lift_placement: LowerLiftPlacement | null;
+}
+
+/**
+ * Where the week's heaviest lower lift day sits against the quality and long runs, read
+ * by the SAME rule the live week map uses to place it (key-run-proximity.ts, shared with
+ * plan-selection.ts `keyRunAwarePlacement`), so the read never calls preferred a day the
+ * placement would trade away:
+ *  - `eve_of_key_run`: the day before either (worst — the legs go into the run worked);
+ *  - `on_key_run`: a quality or long run's own day (the legs carry both on one day);
+ *  - `after_key_run`: the day after either (the legs are still carrying the run);
+ *  - `neutral`: clear of both by at least a day — the only `preferred` placement, and the
+ *    slot the placement trades a heavy lower day onto when one is free.
+ * `note` is one plain sentence. Evidence (concurrent-training scheduling: lower-body
+ * lifting kept out of the 24 h around a quality or long run) is moderate and partly
+ * practice-based, so this stays a read: it moves no day and asks nothing.
+ */
+export interface LowerLiftPlacement {
+  state: "eve_of_key_run" | "on_key_run" | "after_key_run" | "neutral";
+  preferred: boolean;
+  note: string;
 }
 
 /**
@@ -116,7 +143,8 @@ const CLEAN = (
   quality: number | null,
   source: WeekLayoutRead["source"],
   stated: { lift_days: string[]; lift_days_source: WeekLayoutRead["lift_days_source"]; run_days: string[] },
-  space: WeekLayoutRead["space"] = "template"
+  space: WeekLayoutRead["space"] = "template",
+  lowerPlacement: LowerLiftPlacement | null = null
 ): WeekLayoutRead => ({
   clean: true,
   space,
@@ -131,6 +159,7 @@ const CLEAN = (
   lift_days_source: stated.lift_days_source,
   run_days: stated.run_days,
   source,
+  lower_lift_placement: lowerPlacement,
 });
 
 // day_number is a Mon–Sun template (weeklyRunPlan anchors slot 1 on mondayOf), so the
@@ -514,6 +543,107 @@ function laterRunSlot(
     : later;
 }
 
+// ---- "hard days hard": where the heaviest lower lift day sits ----
+
+const PLACEMENT_EVE_VARIANTS: ReadonlyArray<(lift: string, runDay: string, run: string) => string> = [
+  (lift, runDay, run) => `${cap(lift)} sits the day before ${runDay}'s ${run}, so the legs go into that run already worked.`,
+  (lift, runDay, run) => `The heaviest leg day this week, ${lift}, lands on the eve of ${runDay}'s ${run}.`,
+  (lift, runDay, run) => `${runDay}'s ${run} follows straight on from ${lift}, so the run starts on tired legs.`,
+];
+
+const PLACEMENT_SAME_DAY_VARIANTS: ReadonlyArray<(lift: string, runDay: string, run: string) => string> = [
+  (lift, runDay, run) => `${cap(lift)} shares ${runDay} with the ${run}, so the legs carry both on one day.`,
+  (_lift, runDay, run) => `The heavy legs and the ${run} both land on ${runDay}, a lot to ask of the legs in one day.`,
+  (lift, runDay, run) => `${runDay} carries both the ${run} and ${lift}, so that one day asks the legs for two hard efforts.`,
+];
+
+const PLACEMENT_DAY_AFTER_VARIANTS: ReadonlyArray<(lift: string, runDay: string, run: string) => string> = [
+  (lift, runDay, run) => `${cap(lift)} comes the day after ${runDay}'s ${run}, while the legs are still carrying the run.`,
+  (_lift, runDay, run) => `The heavy legs follow ${runDay}'s ${run}, so they start that session still carrying the run.`,
+  (lift, runDay, run) => `${cap(lift)} lands right after ${runDay}'s ${run}, when the legs are still carrying it.`,
+];
+
+const PLACEMENT_NEUTRAL_VARIANTS: ReadonlyArray<(lift: string) => string> = [
+  (lift) => `${cap(lift)} sits clear of the quality and long runs.`,
+  (lift) => `The heaviest leg day, ${lift}, keeps its distance from the key runs this week.`,
+  (lift) => `${cap(lift)} sits away from the key runs, neither right before one nor paired with one.`,
+];
+
+// A ring day (1 = Monday … 7 = Sunday) as a JS weekday (0 = Sunday), the key-run rule's own.
+const ringDow = (day: number): number => day % 7;
+
+const PLACEMENT_RANK: Readonly<Record<KeyRunRelation, number>> = { eve: 0, on: 1, after: 2 };
+
+/**
+ * Where the week's heaviest lower lift day sits against its quality and long run. Pure,
+ * on the same ring the collision read uses, judged by the ONE proximity rule the live
+ * placement trades on (key-run-proximity.ts `keyRunRelation`). Ties among the heaviest read
+ * the worst placement first (an eve anywhere is the eve, then a run's own day, then the
+ * day after one); on a tie between the runs the quality run speaks. null when there is no
+ * heavy lower day or no key run.
+ */
+export function lowerLiftPlacement(
+  heaviest: readonly number[],
+  long: number | null,
+  quality: number | null,
+  date: string,
+  loads: readonly HeavyLowerDayLoad[] = []
+): LowerLiftPlacement | null {
+  const days = heaviest.filter(onRing);
+  const longDay = long != null && onRing(long) ? long : null;
+  const qualityDay = quality != null && onRing(quality) ? quality : null;
+  if (!days.length || (longDay == null && qualityDay == null)) return null;
+  const byDay = new Map(loads.map((l) => [l.day_number, l]));
+  const label = (day: number) => strengthDayLabel(byDay.get(day), day);
+  const keyRunDows = [qualityDay, longDay].filter((d): d is number => d != null).map(ringDow);
+  // The worst relation wins; between equals, the one against the quality run (the session
+  // the heavy legs cost most), then the earlier day.
+  let worst: { day: number; relation: KeyRunRelation; runDay: number; rank: number } | null = null;
+  for (const h of days) {
+    const relation = keyRunRelation(ringDow(h), keyRunDows);
+    if (!relation) continue;
+    const runAt = relation === "eve" ? nextDay(h) : relation === "on" ? h : prevDay(h);
+    const runDay = runAt === qualityDay ? qualityDay : (longDay as number);
+    const rank = PLACEMENT_RANK[relation] * 2 + (runDay === qualityDay ? 0 : 1);
+    if (!worst || rank < worst.rank) worst = { day: h, relation, runDay, rank };
+  }
+  if (!worst) {
+    return {
+      state: "neutral",
+      preferred: true,
+      note: pickDayVariant(PLACEMENT_NEUTRAL_VARIANTS, date, "week-layout:lower-placement:neutral")(label(days[0])),
+    };
+  }
+  const h = worst.day;
+  const runDay = worst.runDay;
+  const run = runDay === qualityDay ? "quality run" : "long run";
+  if (worst.relation === "eve")
+    return {
+      state: "eve_of_key_run",
+      preferred: false,
+      note: pickDayVariant(PLACEMENT_EVE_VARIANTS, date, "week-layout:lower-placement:eve")(label(h), weekday(runDay), run),
+    };
+  if (worst.relation === "on")
+    return {
+      state: "on_key_run",
+      preferred: false,
+      note: pickDayVariant(PLACEMENT_SAME_DAY_VARIANTS, date, "week-layout:lower-placement:same-day")(
+        label(h),
+        weekday(runDay),
+        run
+      ),
+    };
+  return {
+    state: "after_key_run",
+    preferred: false,
+    note: pickDayVariant(PLACEMENT_DAY_AFTER_VARIANTS, date, "week-layout:lower-placement:day-after")(
+      label(h),
+      weekday(runDay),
+      run
+    ),
+  };
+}
+
 /**
  * Does this week's lifting compose with this week's running?
  *
@@ -658,14 +788,18 @@ export function weekLayoutRead(
     : [];
   // The run days the read reports stay where the week placed them; only the collision
   // test reads past a run that is already done.
+  // The week's SHAPE, read off the run placement as planned (a run already done still
+  // tells where the hard days sit), never off the open-run filter below.
+  const lowerPlacement = lowerLiftPlacement(heaviest, placement.long, placement.quality, d, loads);
   if (!heavy.length || (long == null && quality == null))
-    return CLEAN(heaviest, heavy, placement.long, placement.quality, source, stated, space);
+    return CLEAN(heaviest, heavy, placement.long, placement.quality, source, stated, space, lowerPlacement);
 
   // A heavy day already trained is history: it never leads an adjacency. (It still
   // counts as a hard day in a stack, where it is real fatigue beside what is ahead.)
   const keyLower = keyLowerDays(heaviest, loads).filter((day) => !closed.has(day));
   const collisions = liveCollisions(detectCollisions(keyLower, heavy, long, quality, loads), heavy, closed);
-  if (!collisions.length) return CLEAN(heaviest, heavy, placement.long, placement.quality, source, stated, space);
+  if (!collisions.length)
+    return CLEAN(heaviest, heavy, placement.long, placement.quality, source, stated, space, lowerPlacement);
 
   // The lead: an adjacency collision names a concrete move, so it speaks ahead of the
   // stack (which is usually the same problem seen wider).
@@ -765,5 +899,6 @@ export function weekLayoutRead(
     lift_days_source: stated.lift_days_source,
     run_days: stated.run_days,
     source,
+    lower_lift_placement: lowerPlacement,
   };
 }

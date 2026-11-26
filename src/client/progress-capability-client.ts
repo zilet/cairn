@@ -9,20 +9,42 @@ type CapabilityMuscleRow = CapabilityRead["muscles"][number];
 function capVerdictWord(verdict: unknown): string {
   if (verdict === "climbing" || verdict === "progressing") return "climbing";
   if (verdict === "holding") return "holding";
-  if (verdict === "slipping") return "slipping";
-  return "not enough yet";
+  if (verdict === "slipping") return "easing";
+  return "too early to tell";
 }
 
-function capQualifierWord(qualifier: unknown): string {
-  if (qualifier === "cut") return "holding through the cut";
+// The context a flat or easing read sits in. Said as context, never as a verdict of its
+// own: "holding through the cut" only beside a unit that is in fact holding.
+function capQualifierWord(qualifier: unknown, verdict?: unknown): string {
+  if (qualifier === "cut") return verdict === "holding" ? "holding through the cut" : "during the cut";
   if (qualifier === "run_build") return "the legs are carrying the run build";
   if (qualifier === "recovery") return "a lighter week";
   return "";
 }
 
+// The plateau ladder's next lever for a unit, as one quiet line. "" for a unit still
+// climbing, one whose hold waits (too young, explained, already moving), or no lever at all.
+function capNextLine(next: CapabilityUnitRow["next"] | null | undefined): string {
+  if (!next) return "";
+  if (next.lever === "rep_scheme") return "Next: a higher rep range at the same weight";
+  if (next.lever === "set_quality") return "Next: take the sets a little closer to failure";
+  if (next.lever === "volume") return "Next: one more set";
+  if (next.lever === "variation") return next.candidate ? `Next: rotate in ${next.candidate}` : "Next: a close variation";
+  return "";
+}
+
+// "rear delts" -> "Rear delts": a muscle name reads as a label.
+function capGroupLabel(group: unknown): string {
+  const text = String(group ?? "").trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+}
+
 function capContributorHtml(row: CapabilityUnitRow["contributors"][number]): string {
   const when = row.last_trained && typeof relAge === "function" ? relAge(row.last_trained) : row.last_trained || "";
-  const meta = [when ? `last trained ${when}` : "", row.in_plan ? "on your plan" : "not on the plan now"]
+  // A lift the read cannot judge yet says so; one it can judge needs no word here (the
+  // movement's own line speaks for it).
+  const early = row.direction === "not_enough" ? "too early to tell" : "";
+  const meta = [when ? `last trained ${when}` : "", row.in_plan ? "on your plan" : "not on the plan now", early]
     .filter(Boolean)
     .join(" · ");
   return `<div class="pcap-contrib">
@@ -32,13 +54,15 @@ function capContributorHtml(row: CapabilityUnitRow["contributors"][number]): str
 }
 
 function capUnitHtml(unit: CapabilityUnitRow, index: number): string {
-  const quals = (unit.qualifiers || []).map(capQualifierWord).filter(Boolean);
+  const quals = (unit.qualifiers || []).map((q) => capQualifierWord(q, unit.verdict)).filter(Boolean);
   const body = (unit.contributors || []).map(capContributorHtml).join("");
+  const next = unit.in_plan ? capNextLine(unit.next) : "";
   return `<details class="pcap-unit reveal" style="${stagger(index)}">
     <summary>
       <span class="pcap-unit-head"><span class="pcap-unit-name">${escHtml(unit.label)}</span><span class="pcap-word lbl">${escHtml(capVerdictWord(unit.verdict))}</span></span>
       ${unit.line ? `<span class="pcap-line">${escHtml(unit.line)}</span>` : ""}
       ${quals.length ? `<span class="pcap-qual lbl">${escHtml(quals.join(" · "))}</span>` : ""}
+      ${next ? `<span class="pcap-qual pcap-next lbl">${escHtml(next)}</span>` : ""}
     </summary>
     ${body ? `<div class="pcap-contribs">${body}</div>` : ""}
   </details>`;
@@ -46,7 +70,7 @@ function capUnitHtml(unit: CapabilityUnitRow, index: number): string {
 
 function capMuscleHtml(muscle: CapabilityMuscleRow, index: number): string {
   return `<div class="pcap-muscle reveal" style="${stagger(index)}">
-    <span class="pcap-unit-head"><span class="pcap-unit-name">${escHtml(muscle.group)}</span><span class="pcap-word lbl">${escHtml(capVerdictWord(muscle.verdict))}</span></span>
+    <span class="pcap-unit-head"><span class="pcap-unit-name">${escHtml(capGroupLabel(muscle.group))}</span><span class="pcap-word lbl">${escHtml(capVerdictWord(muscle.verdict))}</span></span>
     ${muscle.line ? `<span class="pcap-line">${escHtml(muscle.line)}</span>` : ""}
   </div>`;
 }
@@ -94,6 +118,6 @@ async function loadCapability(): Promise<void> {
   wireGuides(slot as HTMLElement);
 }
 
-const CAIRN_PROGRESS_CAPABILITY = { capVerdictWord, capQualifierWord, capabilityHtml, loadCapability };
+const CAIRN_PROGRESS_CAPABILITY = { capVerdictWord, capQualifierWord, capNextLine, capabilityHtml, loadCapability };
 
 Object.assign(globalThis, { CairnProgressCapability: CAIRN_PROGRESS_CAPABILITY, capabilityHtml, loadCapability });

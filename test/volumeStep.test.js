@@ -180,18 +180,19 @@ function seedChest({
   const weights = { "Barbell Bench Press": 100, "Incline Dumbbell Press": 60, "Cable Fly": 30 };
   logDays.forEach((daysAgo, i) => {
     for (const name of CHEST_LIFTS) {
-      const weight = name === "Cable Fly" && flyWeights ? flyWeights[i] : weights[name] + 5 * i;
+      // HELD loads (the volume step is for a movement that is holding: a climbing one needs
+      // nothing), every set carried.
+      const weight = name === "Cable Fly" && flyWeights ? flyWeights[i] : weights[name];
       logLift(name, daysAgo, weight, sets, name === "Cable Fly" ? flyRir : null);
     }
-    if (extra > 0) logLift("Pec Deck", daysAgo, 50 + 2 * i, extra);
+    if (extra > 0) logLift("Pec Deck", daysAgo, 50, extra);
   });
   for (const daysAgo of OUTCOME_DAYS) {
-    const i = LOG_DAYS.indexOf(daysAgo);
     seedOutcome(
       day(-daysAgo),
       CHEST_LIFTS.map((name) => {
-        const w = weights[name] + 5 * i;
-        return dose(name, { planned: planned[name], done: sets, target: w, recent: w - 5 });
+        const w = weights[name];
+        return dose(name, { planned: planned[name], done: sets, target: w, recent: w });
       })
     );
   }
@@ -213,12 +214,13 @@ function base({ leadMode = "lead", plan = week(), chest = {}, drivePlan = true }
       "precondition: the plan leaves no gap, coverage has nothing to close"
     );
     assert.ok(volumeToleranceRead(today()), "precondition: the log vouches for the plan's sets");
-    const lifts = getProgramState(today()).lifts;
-    assert.equal(
-      lifts.find((l) => l.exercise === "Barbell Bench Press")?.status,
-      "progressing",
-      "precondition: the bench is moving"
-    );
+    if (!chest.logDays) {
+      // A log long past the read's window forms no unit at all (the no-habit case below).
+      const flat = getProgramState(today()).capability?.units?.find((u) => u.key === "horizontal-push:flat");
+      assert.equal(flat?.verdict, "holding", "precondition: the flat press is holding");
+      assert.equal(flat?.in_plan, true);
+      assert.deepEqual(flat?.qualifiers, [], "precondition: nothing explains the hold");
+    }
     assert.equal(lightWeekExemption(today()), null, "precondition: no light week");
     assert.notEqual(getProgramState(today()).mesocycle.phase, "deload-due", "precondition: no deload is earned");
   }
@@ -336,9 +338,10 @@ test("settling: the next step waits until the last was trained twice, then comes
   assert.equal(waiting.status, "settling");
   assert.ok(waiting.blocked.some((b) => b.group === "chest" && b.code === "settling"));
   assert.equal(rows().length, 1);
-  // Trained a second time since it landed, every written set carried at a rising load: settled.
-  // The bench (four sets, a habit of four) may take one more, to five — one above its habit.
-  logLift("Barbell Bench Press", 3, 130, 4);
+  // Trained a second time since it landed, every written set carried at the held load: settled.
+  // The bench (four sets, a habit of four) may take one more, to five — one above its habit —
+  // since the flat press is still holding (a climb would need nothing).
+  logLift("Barbell Bench Press", 3, 100, 4);
   const next = settleVolumeStep({ act: true });
   assert.equal(next.status, "routed", JSON.stringify(next));
   assert.equal(next.lift, "Barbell Bench Press");
@@ -362,7 +365,7 @@ test("a step that was not carried blocks the next: a session short of the writte
     `DELETE FROM logged_sets WHERE id = (SELECT MAX(ls.id) FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
        JOIN exercises e ON e.id = ls.exercise_id WHERE e.name = 'Barbell Bench Press' AND s.date = ?)`
   ).run(day(-5));
-  logLift("Barbell Bench Press", 3, 130, 4);
+  logLift("Barbell Bench Press", 3, 100, 4);
   const out = settleVolumeStep({ act: true });
   assert.equal(out.status, "settling");
   assert.ok(
@@ -379,7 +382,7 @@ test("a step that was not carried blocks the next: the load fell", () => {
     `UPDATE logged_sets SET weight = 80 WHERE id IN (SELECT ls.id FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
        JOIN exercises e ON e.id = ls.exercise_id WHERE e.name = 'Barbell Bench Press' AND s.date = ?)`
   ).run(day(-5));
-  logLift("Barbell Bench Press", 3, 130, 4);
+  logLift("Barbell Bench Press", 3, 100, 4);
   const out = settleVolumeStep({ act: true });
   assert.equal(out.status, "settling");
   assert.ok(
@@ -909,16 +912,15 @@ test("a session already composed on the lift's plan day waits for the boundary",
   assert.equal(benchSets(), 3, "today's composed Upper is untouched");
 });
 
-test("a regressing lift in the group blocks the group", () => {
+test("a slipping movement in the group blocks the group (more volume is the wrong lever for a slide)", () => {
   base({ chest: { flyWeights: [60, 55, 50, 45, 40] } });
-  assert.equal(
-    getProgramState(today()).lifts.find((l) => l.exercise === "Cable Fly")?.status,
-    "regressing",
-    "precondition"
-  );
+  const st = getProgramState(today());
+  assert.equal(st.lifts.find((l) => l.exercise === "Cable Fly")?.status, "regressing", "precondition");
+  const flyUnit = st.capability.units.find((u) => u.lifts.some((l) => l.exercise === "Cable Fly"));
+  assert.equal(flyUnit?.verdict, "slipping", "precondition: the fly movement is slipping");
   const out = settleVolumeStep({ act: true });
   assert.equal(out.status, "held");
-  assert.equal(out.hold, "regressing_lift");
+  assert.equal(out.hold, "unit_slipping");
   assert.equal(benchSets(), 3);
 });
 
@@ -1172,4 +1174,82 @@ test("every phrasing keeps the reading grammar, in both registers, with the numb
   );
   assert.equal(payload.changes[0].sets, 4);
   assert.equal(payload.volume_step.basis[0].sets, 3);
+});
+
+// ---- the group condition is read per movement unit (the capability read) -------------
+
+test("the set goes to a lift of the HOLDING movement: a climbing flat press needs nothing, the incline takes it", () => {
+  base();
+  // The flat press now climbs: two heavier sessions at the same reps.
+  logLift("Barbell Bench Press", 3, 115, 4);
+  logLift("Barbell Bench Press", 2, 120, 4);
+  const units = getProgramState(today()).capability.units;
+  assert.equal(units.find((u) => u.key === "horizontal-push:flat")?.verdict, "climbing", "precondition");
+  assert.equal(units.find((u) => u.key === "horizontal-push:incline")?.verdict, "holding", "precondition");
+  const out = settleVolumeStep({ act: true, dry: true });
+  assert.equal(out.status, "would_route", JSON.stringify(out));
+  assert.equal(out.lift, "Incline Dumbbell Press");
+  assert.ok(out.blocked.some((b) => b.lift === "Barbell Bench Press" && b.code === "unit_not_holding"));
+});
+
+test("the premise applies the same unit rule: a step whose movement now climbs is gone", () => {
+  base({ leadMode: "review_everything" });
+  const out = settleVolumeStep({ act: true });
+  assert.equal(out.status, "routed");
+  assert.equal(out.lift, "Barbell Bench Press");
+  const parsed = repo.getProposal(out.proposal_id).parsed;
+  assert.equal(volumeStepStillFits(parsed), "fits");
+  logLift("Barbell Bench Press", 3, 115, 4);
+  logLift("Barbell Bench Press", 2, 120, 4);
+  assert.equal(volumeStepStillFits(parsed), "gone", "a climbing movement needs no added set");
+});
+
+// ---- one server-owned structural change per lift per week (lift-structural-change.ts) ----
+
+// A plateau-ladder change on a lift, as unit-plateau-change.ts writes it: open (a draft), or
+// applied with its landing decision.
+function plateauChangeRow(lift, { status = "draft" } = {}) {
+  const info = db
+    .prepare(
+      `INSERT INTO plan_proposals (agent, instruction, raw_output, parsed_json, status)
+       VALUES ('unit-plateau', 'x', '', ?, ?)`
+    )
+    .run(
+      JSON.stringify({ unit_plateau: { unit_key: "horizontal-push:flat", lever: "rep_scheme", lift, day_number: 1 } }),
+      status
+    );
+  const id = Number(info.lastInsertRowid);
+  if (status === "applied") {
+    db.prepare(
+      `INSERT INTO brain_decisions
+         (kind, domain, summary, status, autonomy_tier, risk_class, source_ref_type, source_ref_key, effective_date)
+       VALUES ('plan_change', 'training', 'x', 'applied', 'quiet_apply', 'low', 'plan_proposal', ?, ?)`
+    ).run(String(id), today());
+  }
+  return id;
+}
+
+test("a plateau-ladder change open on the lift holds the step off it: one structural change a lift a week", () => {
+  base();
+  plateauChangeRow("Barbell Bench Press");
+  const out = settleVolumeStep({ act: true });
+  assert.notEqual(out.lift, "Barbell Bench Press", JSON.stringify(out));
+  assert.ok(
+    out.blocked.some((b) => b.lift === "Barbell Bench Press" && b.code === "lift_changed_this_week"),
+    JSON.stringify(out)
+  );
+  assert.equal(benchSets(), 3, "the bench keeps its sets");
+});
+
+test("at landing: a plateau change landed this week on the lift holds the step; one written after the step does not", () => {
+  base({ leadMode: "review_everything" });
+  const out = settleVolumeStep({ act: true });
+  assert.equal(out.status, "routed");
+  assert.equal(out.lift, "Barbell Bench Press");
+  const parsed = repo.getProposal(out.proposal_id).parsed;
+  const later = plateauChangeRow("Barbell Bench Press");
+  assert.equal(volumeStepStillFits(parsed, today(), out.proposal_id), "fits", "the step came first");
+  db.prepare(`DELETE FROM plan_proposals WHERE id = ?`).run(later);
+  plateauChangeRow("Barbell Bench Press", { status: "applied" });
+  assert.equal(volumeStepStillFits(parsed, today(), out.proposal_id), "held");
 });

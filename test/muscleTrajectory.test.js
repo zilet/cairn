@@ -9,6 +9,8 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { repo, resetTables } from "./_seed.js";
 import { localDateISO } from "../dist/repo/shared.js";
+import { ladderCallLine } from "../dist/repo/program-state.js";
+import { unitPlateauLadder } from "../dist/repo/unit-plateau.js";
 
 const REF = "2026-04-20";
 const back = (n) => new Date(new Date(REF + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
@@ -96,16 +98,42 @@ test("the compound leads the group: one stalled accessory under an advancing squ
   assert.match(quads.note, /Leg Extension is flat/, "the accessory is named in the note at most");
 });
 
-test("a stalled lead compound stalls the group even when an accessory climbs", () => {
+test("the muscle's direction is the capability read's: a flat squat beside a climbing extension holds, said per movement", () => {
+  // The group's verdict is the capability read's muscle verdict, and a muscle follows its
+  // MAIN unit (the one carrying most of its recent work): a climbing extension beside a
+  // flat squat does not make the quads read progressing. The flat squat is said where
+  // movements are said: its own unit holds, and the program's adaptations name it.
   stuck("Back Squat", 275);
   rising("Leg Extension", 100, 10);
   const quads = repo.muscleGroupTrajectory(REF).groups.find((g) => g.group === "quads");
-  assert.equal(quads.verdict, "stalling");
-  assert.equal(quads.lead_lift, "Back Squat");
-  assert.ok(quads.vary_options.every((o) => !/extension|curl|lunge/i.test(o.name)), "a squat is varied with a squat");
+  const st = repo.getProgramState(REF);
+  const muscle = st.capability.muscles.find((m) => m.group === "quads");
+  assert.equal(muscle.verdict, "holding", "precondition: the capability read has the quads holding with their main unit");
+  assert.equal(quads.verdict, "stalling", "a holding muscle whose lead lift is flat reads stalling");
+  assert.equal(quads.lead_lift, "Back Squat", "the compound still leads");
+  assert.equal(st.capability.units.find((u) => u.key === "squat")?.verdict, "holding");
+  // The program counts it holding. Its adaptations entry is the plateau ladder's lever and
+  // nothing else, and the ladder judges a movement only through its PLAN lift: with no plan
+  // written there is no plan lift to judge, so the holding squat gets no call (never a
+  // second opinion from the lift's own stall tell).
+  assert.match(st.headline, /1 holding/, st.headline);
+  assert.ok(!st.adaptations_due.some((a) => /your squat work|Back Squat/.test(a)), st.adaptations_due.join(" | "));
+  // With the squat on a written plan, the entry is exactly the ladder's line for its unit.
+  repo.savePlanDay(1, "Legs", "Legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 275 },
+    { exercise: "Leg Extension", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140 },
+  ]);
+  const planned = repo.getProgramState(REF);
+  const rung = unitPlateauLadder(REF).units.find((u) => u.unit_key === "squat") ?? null;
+  const expected = ladderCallLine(rung, "squat", "Back Squat");
+  assert.deepEqual(
+    planned.adaptations_due.filter((a) => /your squat work/.test(a)),
+    expected ? [expected] : [],
+    planned.adaptations_due.join(" | ")
+  );
 });
 
-test("synergist credit counts: a climbing row leads biceps over a stuck curl, unless it only grazes them", () => {
+test("synergist credit counts: a climbing row leads biceps over a stuck curl, unless it only grazes them; the direction follows the main unit", () => {
   rising("Barbell Row", 135, 10);
   stuck("Barbell Curl", 75, 8);
   const credits = (bicepsShare) => (name) =>
@@ -118,12 +146,15 @@ test("synergist credit counts: a climbing row leads biceps over a stuck curl, un
         ? [{ group: "biceps", share: 1, role: "primary" }]
         : [];
   const strong = repo.muscleGroupTrajectory(REF, { creditFor: credits(0.5) }).groups.find((g) => g.group === "biceps");
-  assert.equal(strong.verdict, "advancing");
+  // The curl carries most of the biceps' recent work and it is stuck: the muscle holds.
+  assert.equal(strong.verdict, "maintaining");
   assert.equal(strong.lead_lift, "Barbell Row");
   assert.equal(strong.lifts_read, 2);
+  // A sliver never LEADS the group; its direction is the capability read's muscle verdict,
+  // which reads its own credit table (the injected one shapes only the lead).
   const graze = repo.muscleGroupTrajectory(REF, { creditFor: credits(0.25) }).groups.find((g) => g.group === "biceps");
-  assert.equal(graze.verdict, "stalling", "a lift crediting a sliver never speaks for the group");
-  assert.equal(graze.lead_lift, "Barbell Curl");
+  assert.equal(graze.lead_lift, "Barbell Curl", "a lift crediting a sliver never speaks for the group");
+  assert.equal(graze.verdict, "stalling", "a holding muscle led by its stuck curl reads stalling");
   // The back reads the row either way.
   const backRead = repo.muscleGroupTrajectory(REF, { creditFor: credits(0.5) }).groups.find((g) => g.group === "back");
   assert.equal(backRead.verdict, "advancing");

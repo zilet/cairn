@@ -6,10 +6,14 @@
 // The answer depends on who the athlete IS, not only on how far away the race is. A
 // strength-led athlete (`isStrengthLedIntent`: endurance role none/supporting, or
 // endurance ranked below both muscle and strength) keeps PROGRESSING through the whole
-// build — full sets, ordinary load steps — and only the legs are trimmed, and only in
-// the last two weeks, by the stress budget (stress-budget.ts): taper week the leg lifts
-// go lighter with fewer sets, race week the heavy leg lifts sit out. The upper body
-// keeps progressing through both. An endurance-led athlete (primary / co_primary, or a
+// build — full sets, ordinary load steps — and only the legs are trimmed, by the stress
+// budget (stress-budget.ts) alone: taper week the leg lifts go lighter with fewer sets,
+// race week the heavy leg lifts sit out, and on the eve of a placed key run the
+// non-anchor leg work loses sets at its load. Outside a race build the run calendar's
+// ONLY lifting change is the standing eve (leg accessories, sets only, tomorrow's
+// quality or long run), and every week keeps one heavy lower anchor session whole
+// (`WEEKLY_HEAVY_LOWER_ANCHOR_MIN`). The upper body keeps progressing throughout.
+// An endurance-led athlete (primary / co_primary, or a
 // derived intent) keeps the classic race-build lifting arc: maintenance loads while
 // sharpening, light and fast in the taper, legs off in race week.
 //

@@ -6,6 +6,7 @@ import { dailySiteSeries } from "./measurement-series.js";
 import { HARD_EFFORT } from "./heavy-load.js";
 import { liftTrainedRecently } from "./program-state.js";
 import { strengthDeclineIsMeaningful } from "./whole-person-trajectory.js";
+import { strengthStrainUnitTally } from "./capability-consumers.js";
 import { completedIntakeWindow, type CompletedIntakeDay } from "./intake-window.js";
 import { vouchedRunCompliance } from "./sessions.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
@@ -761,9 +762,21 @@ function performanceChannel(since: string, today: string, program: any, whole: a
   // Only a lift in the current rotation is evidence: one untrained for weeks has no
   // present trend (program-state already reads it as re-baselining; the guard here
   // holds for an injected program state too).
-  const lifts: any[] = Array.isArray(program?.lifts) ? program.lifts : [];
+  // A resting lift (off the plan, not trained lately) is never evidence either way.
+  const lifts: any[] = (Array.isArray(program?.lifts) ? program.lifts : []).filter((lift: any) => lift?.resting !== true);
   const regressing = lifts.filter((lift: any) => lift?.status === "regressing" && liftTrainedRecently(lift, today));
   const progressing = lifts.filter((lift: any) => lift?.status === "progressing");
+  // Counted over MOVEMENT UNITS when the capability read rides on the state (capability-
+  // consumers.ts, the same population as the energy-deficiency stall arm): two variants of
+  // one movement are one witness, a lift he is not doing never counts, and the bar is the
+  // one the lift tally used — the trajectory's proportionate read — over climbing, slipping
+  // and holding units in place of progressing, regressing and flat lifts. No qualifier
+  // explains a unit away and no stricter stall condition is stacked on top: the channel
+  // fires wherever the lift tally fired once the same lifts are grouped into movements.
+  // With no graded unit (an injected legacy state, a failed or missing read) the lift
+  // tally answers, so a read that cannot be had never switches the channel off.
+  const units = strengthStrainUnitTally(program?.capability ?? null);
+  const byUnits = units.read.verdict !== "absent";
   const wholeStrength = (Array.isArray(whole?.domains) ? whole.domains : []).find((d: any) => d?.domain === "strength");
   const endurance = enduranceStrainSignal(today);
   // ONE bar for "strength is under strain": the trajectory's proportionate read
@@ -776,18 +789,22 @@ function performanceChannel(since: string, today: string, program: any, whole: a
   const wholeAuthoritative = wholeStrength?.lift_counts != null && wholeStrength?.verdict !== "unknown";
   const programStrain =
     !wholeAuthoritative &&
-    strengthDeclineIsMeaningful({
-      improving: lifts.filter((lift: any) => lift?.status === "progressing" && liftTrainedRecently(lift, today))
-        .length,
-      declining: regressing.length,
-      steady: lifts.filter(
-        (lift: any) =>
-          (lift?.status === "maintaining" || lift?.status === "plateaued") && liftTrainedRecently(lift, today)
-      ).length,
-    });
+    (byUnits
+      ? strengthDeclineIsMeaningful({ improving: units.improving, declining: units.declining, steady: units.steady })
+      : strengthDeclineIsMeaningful({
+          improving: lifts.filter((lift: any) => lift?.status === "progressing" && liftTrainedRecently(lift, today))
+            .length,
+          declining: regressing.length,
+          steady: lifts.filter(
+            (lift: any) =>
+              (lift?.status === "maintaining" || lift?.status === "plateaued") && liftTrainedRecently(lift, today)
+          ).length,
+        }));
   const strengthStrain = lowDays.size >= 2 || programStrain || wholeStrength?.verdict === "worse";
   const strain = strengthStrain || !!endurance;
-  const support = !strain && (progressing.length >= 2 || wholeStrength?.verdict === "better");
+  const climbingCount = byUnits ? units.improving : progressing.length;
+  const support = !strain && (climbingCount >= 2 || wholeStrength?.verdict === "better");
+  const strengthSamples = byUnits ? units.read.stalled + units.improving : regressing.length + progressing.length;
   return {
     key: "performance",
     direction: strain ? "strain" : support ? "support" : "unknown",
@@ -800,10 +817,14 @@ function performanceChannel(since: string, today: string, program: any, whole: a
       : support
         ? "Same-lift performance is holding or progressing, which argues against an urgent fuel correction."
         : "Performance evidence is mixed or too thin to call.",
-    samples: rows.length + regressing.length + progressing.length + (endurance ? 1 : 0),
+    samples: rows.length + strengthSamples + (endurance ? 1 : 0),
     evidence_keys: [
       ...(rows.length ? [`sessions.performance:${since}..${today}:n=${rows.length}`] : []),
-      ...(regressing.length ? [`program_state:regressing=${regressing.length}`] : []),
+      ...(byUnits
+        ? [`capability.units:${today}:stalled=${units.read.stalled}/${units.read.graded}:slipping=${units.read.slipping}`]
+        : regressing.length
+          ? [`program_state:regressing=${regressing.length}`]
+          : []),
       ...(endurance ? [endurance.evidence] : []),
       ...(wholeStrength?.evidence_keys ?? []),
     ],

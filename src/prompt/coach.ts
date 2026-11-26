@@ -42,7 +42,10 @@ import {
   MECHANICS_ENCODING,
   MOVEMENT_NOTES_CONTRACT,
   CAIRN_PERSONA,
+  PROGRESS_BY_MOVEMENT_RULE,
+  PLATEAU_LADDER_RULE,
 } from "./shared.js";
+import { liftCallStands } from "../repo/capability-consumers.js";
 
 const PLAN_SCHEMA = `{
   "as_of_date": "<YYYY-MM-DD date this proposal was reasoned from>",
@@ -146,6 +149,8 @@ NON-NEGOTIABLE GUARDRAILS:
   supportive.
 ${MECHANICS_ENCODING}
 ${MOVEMENT_NOTES_CONTRACT}
+${PROGRESS_BY_MOVEMENT_RULE}
+${PLATEAU_LADDER_RULE}
 - Small steps. Thin/absent data -> do not change. Progress a timed exercise ONLY when recent durations
   comfortably meet the current target; propose target_weight for one only when it is a loaded carry/hold.
 ${VOLUME_FLOOR_RULE}
@@ -207,9 +212,14 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
   // is actionable — the agent gets real same-pattern options to choose from
   // (it still respects constraint_notes/injuries and starts light).
   // A resting lift (off the plan, not trained lately) is out of the rotation: never a
-  // stall to rotate away from.
+  // stall to rotate away from. And the MOVEMENT decides, the lift is evidence
+  // (capability-consumers.ts liftCallStands): a stalled variant inside a climbing unit, or a
+  // unit holding through the cut or a run build, is no plateau to rotate away from.
   const stalled = (Array.isArray(state.lifts) ? state.lifts : []).filter(
-    (l: any) => l.resting !== true && (l.status === "plateaued" || l.suggested_action === "vary")
+    (l: any) =>
+      l.resting !== true &&
+      (l.status === "plateaued" || l.suggested_action === "vary") &&
+      liftCallStands(state?.capability ?? null, String(l.exercise ?? ""))
   );
   const injuryAreas = activeInjuryAreas(ctx);
   // Rank candidates by the user's available equipment + a bias toward heavier
@@ -287,18 +297,23 @@ and overrides always win.
 A deterministic PROGRAM-STATE read has already analyzed the logged history — per-lift trend +
 plateau/stall detection (with a suggested action), volume landmarks, mesocycle position, and
 endurance trends. TRUST it as your starting point, then make the nuanced call:
-${JSON.stringify(state)}
+${JSON.stringify({ ...state, capability: undefined })}
+
+${PROGRESS_BY_MOVEMENT_RULE}
+${PLATEAU_LADDER_RULE}
 
 HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
 - PROGRESS what's working: a lift reading "progressing" gets the next conservative load step (see
   the step caps below). Don't fix what isn't broken.
-- BREAK plateaus: a lift reading "plateaued" should NOT just get more load (that's what stalled).
-  Pick the intervention its suggested_action points to — a light DELOAD then a fresh run, ROTATE to a
+- BREAK plateaus: a movement holding (DATA.capability) whose lift reads "plateaued" should NOT just get
+  more load (that's what stalled).
+  Pick the intervention DATA.unit_plateau names for that movement (THE PLATEAU LADDER above); a
+  grinding lift may still take a light DELOAD then a fresh run. A rotation goes to a
   close variation (same movement pattern, different bar path / implement — e.g. back squat → front
-  squat, flat → incline press, barbell row → chest-supported row), or a technique/rep-scheme change.
+  squat, flat → incline press, barbell row → chest-supported row).
   Use a "days" restructure (or swap the exercise within its day) to rotate a variation; keep the rest
   of the day intact.
-- RECOVER what's slipping: a "regressing" lift gets backed off, not pushed.
+- RECOVER what's slipping: a movement slipping with nothing to explain it gets backed off, not pushed.
 - GROUND IN REALITY: prescribe from what the user ACTUALLY logs, never a stale plan number. If a
   lift's recent working weight has outpaced its plan target (e.g. the plan says 27 lb but they log 45-50
   every week), set the target to their real working load, then progress conservatively from THERE —
@@ -332,6 +347,9 @@ HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
   reads clean:true, your restructure MUST leave it clean — moving a lower-body day next to one of those
   runs is a regression, not an evolution. If it already reports collisions, fixing the one it names is a
   legitimate reason for a "days" restructure on its own.
+  DATA.week_layout.lower_lift_placement says where the heaviest lower day sits against the key runs;
+  prefer a layout that never leaves it \`eve_of_key_run\`, but never move a lifting weekday the athlete
+  stated.
 - THE WEEK THE ATHLETE ACTUALLY LIVES (this OUTRANKS every placement preference above): when a
   STATED or OBSERVED LIFTING DAYS block is present, those weekdays are the lifting week — not a hint,
   not a default. DATA.week_layout.lift_days and DATA.week_layout.run_days name them and

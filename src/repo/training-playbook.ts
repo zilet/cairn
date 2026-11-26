@@ -9,6 +9,7 @@ import { unverifiedRegressionHold } from "./calibration.js";
 import { appliedProgressionDeloads } from "./plan.js";
 import { getProfile } from "./profile.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
+import { liftCallStands, type ProgramCapability, unitOfLift } from "./capability-consumers.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 
 export type PlateauPlayKind =
@@ -149,12 +150,35 @@ function recentlyDeloaded(name: string, date: string): boolean {
   }
 }
 
-function strengthPlateauPlays(ps: any, date: string): PlateauPlay[] {
+// A plateau play is about a MOVEMENT, the single lift its evidence (capability-consumers.ts):
+// a stalled lift whose unit is climbing is a swap, not a plateau; one whose unit holds or
+// eases through the cut, a run build or a lighter week is the plan working; an off-plan
+// unit is not his to fix. One play per unit — the lift on the plan speaks first — so the
+// playbook, the program headline and the capability read never tell two stories.
+function plateauLifts(ps: any): any[] {
   const lifts = Array.isArray(ps?.lifts) ? ps.lifts : [];
-  const mode = effectiveGoalMode();
-  return lifts
+  const cap: ProgramCapability | null = ps?.capability ?? null;
+  const stalled = lifts
     // A resting lift (off the plan, not trained lately) is out of the rotation: no play.
     .filter((l: any) => l && l.resting !== true && (l.status === "plateaued" || l.status === "regressing"))
+    .filter((l: any) => liftCallStands(cap, String(l.exercise ?? "")))
+    .sort((a: any, b: any) => Number(b.in_plan === true) - Number(a.in_plan === true));
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const l of stalled) {
+    const unit = unitOfLift(cap, String(l.exercise ?? ""));
+    if (unit) {
+      if (seen.has(unit.key)) continue;
+      seen.add(unit.key);
+    }
+    out.push(l);
+  }
+  return out;
+}
+
+function strengthPlateauPlays(ps: any, date: string): PlateauPlay[] {
+  const mode = effectiveGoalMode();
+  return plateauLifts(ps)
     .map((l: any): PlateauPlay => {
       const name = String(l.exercise || "this lift");
       const grinding = Array.isArray(l.stall_signals) && l.stall_signals.some((s: any) => /grind|rir|same top/i.test(String(s)));

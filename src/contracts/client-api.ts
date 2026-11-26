@@ -22,7 +22,7 @@ import type { ClientFuelIdeas, ClientIntakeBand } from "./fuel.js";
 import type { TodayStonesRead } from "./today-stones.js";
 import type { DataCoverageRead } from "./data-coverage.js";
 import type { DayRecord } from "./day-record.js";
-import type { StrengthCapabilityRead } from "./strength-capability.js";
+import type { CapabilityQualifier, CapabilityVerdict, StrengthCapabilityRead } from "./strength-capability.js";
 import type { DayDetail } from "./day-detail.js";
 import type { RaceCountdown, RaceDays } from "./race-days.js";
 import type { WeekRead } from "./week-read.js";
@@ -2582,6 +2582,37 @@ export interface ClientProgramState {
   hybrid: ClientHybridState | null;
   headline: string;
   adaptations_due: string[];
+  /**
+   * The capability read for this date, summarized (src/repo/capability-consumers.ts
+   * `ProgramCapability`): progress per movement unit and muscle, the lift as evidence.
+   * `available:false` when the read failed; absent only on a partial state.
+   */
+  capability?: ClientProgramCapability;
+}
+
+/** Program state's capability summary: words and names only, never a score. */
+export interface ClientProgramCapability {
+  available: boolean;
+  overall: { verdict: CapabilityVerdict; line: string } | null;
+  units: Array<{
+    key: string;
+    label: string;
+    compound: boolean;
+    in_plan: boolean;
+    verdict: CapabilityVerdict;
+    qualifiers: CapabilityQualifier[];
+    line: string;
+    lifts: Array<{ exercise: string; exercise_id: number; in_plan: boolean; resting: boolean }>;
+    plan_lift: string | null;
+    exposures: number;
+  }>;
+  muscles: Array<{
+    group: string;
+    verdict: "progressing" | "holding" | "slipping" | "not_enough";
+    band: string | null;
+    units: string[];
+    line: string;
+  }>;
 }
 
 export type ClientStrengthObjectiveTargetKind = "return_to_personal_best" | "explicit_est_1rm" | "bodyweight_reps";

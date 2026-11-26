@@ -603,6 +603,15 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   fills gaps only: a person, then the curated tables, always win, and its pattern/region fill is
   opt-in (`{profile:true}`) for progress reads, never today's card. Details in
   `docs/ARCHITECTURE.md` "Progress by movement unit and muscle".
+- **Units drive the decisions, and one ladder picks the lever.** The deload fatigue arm, the volume
+  step, the under-fuelling stall reads, the headline and `adaptations_due` read units through
+  `capability-consumers.ts`; a failed capability read falls back to the lift rule, never to silence.
+  `unitPlateauLadder` (`src/repo/unit-plateau.ts`) is the ONE answer to "which lever next" (wait, rep
+  range, effort, volume, variation): the engine's own vary/introduce defers to it, and the server's
+  rep-range move and accessory rotation are its own bounded changes with a premise. One server-owned
+  structural change per lift per week (`lift-structural-change.ts`). A same-unit lift logged in
+  place of a planned one satisfies the slot but is never an exposure of the planned lift. Details:
+  `docs/ARCHITECTURE.md` "Units drive the decisions, the plateau ladder, lifts and runs as one week".
 - **RIR is optional, and its absence is not weakness** — with no RIR logged, capping the prescribed
   rep range on every working set IS the strength signal (`program-state.ts`/`progression-voice.ts`).
   Details in `docs/ARCHITECTURE.md`.

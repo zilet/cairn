@@ -147,7 +147,9 @@ test("rotating a lift inside the pattern is not a reset: the swap compares nothi
   assert.equal(row.lead_lift, "Barbell Bent Over Row", "the lift trained now leads");
   assert.equal(row.lifts_compared, 0, "neither lift has a reading in both windows");
   assert.equal(row.change, null);
-  assert.equal(row.direction, null, "a rotation is not comparable, never worse");
+  // The direction is the capability read's for the row unit: the swap carries across through
+  // the conservative ratio table, which may confirm a hold but never shows a drop off it.
+  assert.equal(row.direction, "holding", "a rotation inside the pattern reads holding, never worse");
   assert.equal(row.since, null);
   assert.equal(row.now_lb, Math.round(185 * (1 + 5 / 30)));
 });

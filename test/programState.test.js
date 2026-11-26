@@ -81,9 +81,12 @@ test("a stuck-and-grinding lift reads 'plateaued' with a stall signal", () => {
     ohp.stall_signals.some((s) => /grind/.test(s)),
     "flags grinding at RIR 0–1"
   );
+  // What to evolve next for a HOLDING movement is the plateau ladder's lever (unit-plateau.ts),
+  // and the ladder judges a movement through its plan lift: with no plan there is no lift to
+  // change, so the list stays quiet rather than re-deriving a lever from this one lift.
   assert.ok(
-    st.adaptations_due.some((a) => /Overhead Press/.test(a)),
-    "shows up in what to evolve next"
+    !st.adaptations_due.some((a) => /Overhead Press|overhead press/.test(a)),
+    st.adaptations_due.join(" | ")
   );
 });
 

@@ -54,6 +54,12 @@ import {
   type ProgramState,
 } from "./program-state.js";
 import { listContextEvents } from "./health.js";
+import {
+  liftCallStands,
+  type ProgramCapability,
+  type ProgramCapabilityMuscle,
+  unitExplained,
+} from "./capability-consumers.js";
 import { recentAppliedRotations } from "./brain-decisions.js";
 import { getProgress } from "./sessions.js";
 
@@ -267,6 +273,29 @@ export function trajectoryHeadline(all: MuscleGroupRead[]): string {
   return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
 }
 
+// A group's verdict from the capability read's muscle verdict. Progressing advances, not
+// enough reads builds a baseline. A slip stalls the group unless every unit behind it is
+// explained by the cut, a run build or a lighter week (then it is holding, as planned). A
+// hold is a stall only when the lift fold already found one AND that lift's own unit call
+// stands (its unit on the plan, holding or slipping, unexplained); otherwise it maintains.
+function capabilityGroupVerdict(
+  muscle: ProgramCapabilityMuscle,
+  foldVerdict: GroupVerdict,
+  foldLead: string | null,
+  cap: ProgramCapability | null
+): GroupVerdict {
+  if (muscle.verdict === "progressing") return "advancing";
+  if (muscle.verdict === "not_enough") return "building";
+  const keys = new Set(muscle.units);
+  const flat = (cap?.units ?? []).filter(
+    (u) => keys.has(u.key) && u.in_plan && (u.verdict === "holding" || u.verdict === "slipping")
+  );
+  const explained = flat.length > 0 && flat.every((u) => unitExplained(u));
+  if (muscle.verdict === "slipping") return explained ? "maintaining" : "stalling";
+  if (foldVerdict === "stalling" && !explained && foldLead && liftCallStands(cap, foldLead)) return "stalling";
+  return "maintaining";
+}
+
 export function muscleGroupTrajectory(
   date?: string,
   opts: MuscleTrajectoryOpts = {},
@@ -331,6 +360,9 @@ export function muscleGroupTrajectory(
     .filter(Boolean);
   const excludeNames = [...plannedNames, ...rotatedOut];
   const groups: MuscleGroupRead[] = [];
+  // The capability summary program state carries (absent on an injected state without one).
+  const cap: ProgramCapability | null = ps.capability?.available === true ? ps.capability : null;
+  const capByGroup = new Map<string, ProgramCapabilityMuscle>((cap?.muscles ?? []).map((m) => [m.group, m]));
 
   // Walk the canonical taxonomy order so the strip reads in a stable, sensible
   // order. Include a group only when there's something current to say: a lift
@@ -441,6 +473,24 @@ export function muscleGroupTrajectory(
       note = members.length
         ? `${label} ${is} holding steady${bandWord ? `, ${bandWord}` : ""}. There is room for a deliberate push.`
         : `${label} ${is} ticking over${bandWord ? `, ${bandWord}` : ""}.`;
+    }
+
+    // The capability read decides the DIRECTION (capability-consumers.ts): the muscle's
+    // verdict over its movement units, so this surface, the playbook and the capability read
+    // can never disagree. The lift-by-lift fold above supplies the lead, the stall tell and
+    // the vary menu where the movement agrees; where it does not, the capability's own
+    // sentence speaks and no menu is offered. With no read for the group (none in hand, or
+    // an injected state without one) the fold stands as it was.
+    const capMuscle = capByGroup.get(group) ?? null;
+    if (capMuscle) {
+      const target = capabilityGroupVerdict(capMuscle, verdict, lead?.lift.exercise ?? null, cap);
+      if (target !== verdict) {
+        verdict = target;
+        lead = leadCompound ?? [...members].sort(byWeight)[0] ?? null;
+        stalled_signal = null;
+        vary_options = [];
+        note = capMuscle.line || note;
+      }
     }
 
     groups.push({

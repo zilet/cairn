@@ -255,6 +255,12 @@ const CHAT_CORE_KEYS = [
   "flexible_training_agenda",
   "week_training_load",
   "recent_decisions",
+  // Progress per movement unit and muscle, compact (names and words, no rows): how the
+  // athlete is doing per movement is a question chat answers without a read.
+  "capability",
+  // The plateau ladder's next lever per stalled movement (a few short rows at most): the
+  // guardrail that keeps a suggested change to the ladder's lever names it.
+  "unit_plateau",
 ] as const satisfies readonly PromptContextKey[];
 
 /**
@@ -383,6 +389,15 @@ const PLAN_SITE: PromptSiteSpec = {
     // out. Earned under rule 1: the prompt's COVERAGE line names DATA.coverage_gaps and
     // tells the draft to close each one it can, so a new week never ships the same hole.
     "coverage_gaps",
+    // Progress per movement unit and muscle (capability-consumers.ts capabilityPromptView).
+    // Earned under rule 1: the HOW TO JUDGE PROGRESS lines in both plan prompts name
+    // DATA.capability as the read to judge a movement by, in place of a per-lift stall list.
+    "capability",
+    // The plateau ladder's next lever per stalled movement (unit-plateau.ts
+    // unitPlateauForCoach). Earned under rule 1: PLATEAU_LADDER_RULE in both plan prompts
+    // names DATA.unit_plateau as the lever to follow, and the MOVEMENTS THAT NEED A CALL
+    // block (renderProgramState) prints each movement's lever from it.
+    "unit_plateau",
   ],
   sessions: SESSIONS_FULL,
 };
@@ -762,7 +777,15 @@ export const PROMPT_CONTEXT_SITES = {
   // Sunday). Without it the agent read the plan's day_numbers as weekdays and edited
   // the wrong day (2026-10-19). The chat builder computes it itself (the `today_path`
   // precedent), so getCoachContext never pays for it; compact keys, no prose.
-  chat: { keys: [...ALL_KEYS, "typical_training_hour", "dated_week"], sessions: SESSIONS_FULL },
+  //
+  // `capability` (progress per movement unit and muscle, compact) rides in both chat sites:
+  // "am I getting stronger" is answered per movement, never off one lift's stall. And
+  // `unit_plateau` (the ladder's next lever per stalled movement) beside it: chat's "keep
+  // training fresh" guardrail names it, so a suggested change is the ladder's lever.
+  chat: {
+    keys: [...ALL_KEYS, "typical_training_hour", "dated_week", "capability", "unit_plateau"],
+    sessions: SESSIONS_FULL,
+  },
 
   // Chat's LEAN core (settings.chat_context = "lean", the default): what the coach always
   // knows, with everything else one coach read away (CHAT_CORE_MOVED_KEYS below names the

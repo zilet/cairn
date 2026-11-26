@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { exerciseIdentityKey } from "./exercise-canon.js";
-import { readStoredDose } from "./outcome-comparability.js";
+import { ADOPTED_AFTER_LOG, readStoredDose } from "./outcome-comparability.js";
 import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
 
 export type ChallengeVerdict = "not_attempted" | "under_prescribed" | "met" | "exceeded" | "no_target";
@@ -23,6 +23,19 @@ export interface RecentMovementResponse {
 // the same ladder daily-reconciliation writes doses with.
 function movementIdentity(exercise: string): string {
   return exerciseIdentityKey(exercise);
+}
+
+/** daily-reconciliation.ts UNIT_SUBSTITUTE_KEY_PREFIX / UNIT_SUBSTITUTE, restated (that module imports far more than this read needs). */
+export const SUBSTITUTE_DOSE_KEY_PREFIX = "unit_substitute:";
+const SUBSTITUTE_DOSE_REASON = "unit_substitute";
+
+/** A stored dose that is another lift's work or was logged before its card: never a movement response. */
+export function doseIsNotThisLiftsResponse(dose: any): boolean {
+  if (String(dose?.movement_key ?? "").startsWith(SUBSTITUTE_DOSE_KEY_PREFIX)) return true;
+  if (dose?.substituted_by != null && String(dose.substituted_by).trim() !== "") return true;
+  if (dose?.adopted_after_log === true) return true;
+  const reasons: unknown[] = Array.isArray(dose?.non_comparable_reasons) ? dose.non_comparable_reasons : [];
+  return reasons.some((reason) => reason === ADOPTED_AFTER_LOG || reason === SUBSTITUTE_DOSE_REASON);
 }
 
 // A deliberately small learning seam for progression. It only recognizes a
@@ -75,6 +88,11 @@ function recentMovementResponseRead(
       (entry: any) => entry?.movement_key === requestedKey && (intent == null || entry?.intent_key === intent)
     );
     if (!dose) continue;
+    // Another lift's work is never this lift's response: a gym substitution's dose (keyed
+    // `unit_substitute:`, or carrying that reason) and a dose logged before its card was
+    // adopted (`adopted_after_log`, never done against the card) are skipped outright —
+    // not counted as considered, never a verdict — whatever the day's own comparability.
+    if (doseIsNotThisLiftsResponse(dose)) continue;
     if (matchedIntent == null) matchedIntent = String(dose.intent_key);
     if (dose.intent_key !== matchedIntent) continue;
     considered++;

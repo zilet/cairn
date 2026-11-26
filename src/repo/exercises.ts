@@ -27,7 +27,8 @@ import {
 } from "./exercise-guide.js";
 import { isValidGarminRef, mapExerciseToGarmin, sameExerciseIdentity } from "./garmin-exercise-map.js";
 import { type ExerciseInput, validInputProfile, withExerciseInputs } from "./exercise-input.js";
-import { exerciseProfileRead } from "./exercise-profile.js";
+import { EXERCISE_PROFILE_RULES_VERSION, exerciseProfileRead, getExerciseProfile, PROFILE_GROUP_CORRECTION_CONFIDENCE } from "./exercise-profile.js";
+import { recordExerciseGroupCorrection } from "./exercise-group-corrections.js";
 import { curatedMuscleGroup, muscleCreditsShared } from "./muscle-credit.js";
 import { getProgress } from "./sessions.js";
 import { addDaysISO } from "./shared.js";
@@ -124,6 +125,23 @@ function groupTrainedByLift(name: string, liftPrimary: string, group: string): b
   return muscleCreditsShared(name, liftPrimary).some((c) => c.group === group);
 }
 
+// The group a high-confidence agent profile would move a legacy row to, or null. See
+// recheckExerciseGroups. A legacy group may be a person's choice made before sources were
+// tracked, so an agent's word alone never moves it: the curated tables must POSITIVELY name
+// the same group. Tables silent (or naming another group) → no correction.
+function legacyGroupProfileTarget(id: number, storedRaw: string | null, curated: string | null): string | null {
+  if (!curated) return null; // the tables have no opinion: the legacy group stands
+  const profile = getExerciseProfile(id);
+  if (!profile || profile.source !== "agent") return null; // none, or a person's: hands off
+  if (profile.confidence !== PROFILE_GROUP_CORRECTION_CONFIDENCE) return null;
+  if (profile.rules_version < EXERCISE_PROFILE_RULES_VERSION) return null;
+  const target = profile.primary_group;
+  if (!target) return null;
+  if (curated !== target) return null; // the curated tables outrank the profile
+  if (canonicalGroup(storedRaw ?? null) === target) return null;
+  return target;
+}
+
 export interface GroupRecheckChange {
   id: number;
   name: string;
@@ -148,6 +166,24 @@ export function recheckExerciseGroups(): { updated: number; changes: GroupRechec
     const source = row.muscle_group_source ?? null;
     if (source === "user") continue;
     const curated = curatedMuscleGroup(row.name);
+    // A legacy group (authorship unknown, possibly a person's) follows a high-confidence agent
+    // profile only when the curated tables positively agree with it. Never a person's (skipped above), never
+    // a lift whose profile a person set, never a lower-confidence or out-of-date profile.
+    if (source === "legacy") {
+      const target = legacyGroupProfileTarget(Number(row.id), row.muscle_group, curated);
+      if (target) {
+        writeMuscleGroup(Number(row.id), target, "agent");
+        recordExerciseGroupCorrection({
+          exercise_id: Number(row.id),
+          from_group: row.muscle_group ?? null,
+          into_group: target,
+          source_was: source,
+          reason: "profile",
+        });
+        changes.push({ id: Number(row.id), name: row.name, from: row.muscle_group ?? null, into: target, source_was: source });
+        continue;
+      }
+    }
     if (!curated) continue;
     const stored = canonicalGroup(row.muscle_group ?? null);
     if (stored === curated) continue;
@@ -1147,6 +1183,9 @@ export function mergeExercises(
     // must not end up holding the same movement twice.
     const dropped_plan_items = foldPlanDayDuplicates(from, into);
     const moved_plan_items = Number(db.prepare("UPDATE plan_items SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes);
+    // The group-correction ledger follows the survivor (a cascade would erase the record of
+    // what a merged-away lift's group was before a correction).
+    db.prepare("UPDATE exercise_group_corrections SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id);
 
     // strength_objectives references a lift by NAME + normalizedExerciseKey (resolved
     // at read time, not by FK) — repoint any row keyed on the from-lift so an active

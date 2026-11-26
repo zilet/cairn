@@ -1,9 +1,16 @@
+import { PLAN_ITEM_EFFECT_TIER, planItemEffectTier } from "../domain/training/plan-item-order.js";
 import { runPlacement } from "../domain/training/week-layout.js";
 import { addDaysISO, mondayOf } from "../lib/dates.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import type { DailyDecisionKind, DailyDecisionReason, DailyDecisionSnapshot } from "./daily-decision.js";
 import { canonicalGroup, classifyMuscleGroup } from "./exercise-canon.js";
-import { strengthPlanDayOn } from "./plan-selection.js";
+import {
+  fullLoadLowerSessionThisWeek,
+  isHeavyLowerPlanDay,
+  isLowerMainLift,
+  strengthPlanDayOn,
+  weeklyLowerExposure,
+} from "./plan-selection.js";
 import { dowToDayNumber, getEnduranceGoal, isoDow } from "./profile.js";
 import { raceBuild } from "./race-build.js";
 import { raceRecoveryWindow, weekdayShort } from "./race-recovery.js";
@@ -53,12 +60,32 @@ import type { EnduranceRole } from "./training-intent.js";
 //      ruling 2026-09-23: the week's one full leg session keeps its sets and load), never
 //      touches a group that guarantee holds, stands down when `lowerSafetyFloor` already
 //      governs the legs, and stands down when the endurance-led key-run protect in
-//      daily-decision already lightens every lower group for the same run.
+//      daily-decision already lightens every lower group for the same run. It also
+//      stands down when the athlete asked for today's session as it is
+//      (`request.same_day_request`).
+//   3b. THE STANDING EVE (no race build running — no dated race, no build available, or
+//      the build's base phase): the same eve, tighter. Tomorrow's placed quality or long
+//      run only (STANDING_EVE_MAX_DAYS = 1), and only lower ACCESSORY items (isolation /
+//      core tier: leg extension, leg curl, calf raise). ITEM-scoped: the decision names
+//      the items it trims (`trim_exercises`), so a leg curl loses its set while the RDL
+//      in the same group stays whole. ONE set off each (daily-composition.ts
+//      `standingEveSetCap`: max(floor, sets − 1)), load held, the anchor named. Every
+//      stand-down above applies. For a strength-led athlete this, rule 3 and the
+//      taper/race/post-race rules are the ONLY lifting changes the run calendar makes.
+//   The WEEKLY HEAVY LOWER ANCHOR guard (WEEKLY_HEAVY_LOWER_ANCHOR_MIN = 1, guard code
+//      `weekly_heavy_anchor_kept`) sits inside both eves: when today is the week's last
+//      chance at a heavy lower exposure (`heavy_lower_last`: no genuinely loaded lower
+//      session landed earlier this week, no later heavy-lower day laid), every group
+//      holding a squat/hinge main lift the trim would reach keeps its sets. The weekly
+//      lower guarantee in daily-decision (`lowerWeekHolds`) already stands the whole eve
+//      down on such a day when the lifting week is known; the guard keeps the budget's
+//      own decision safe where that read is absent.
 //   4. No day-after-a-hard-run rule: the acute gate (hybrid-load.ts `acuteGate`) is the
 //      one recovery question and already answers it.
 //
 // The week-kind read is raceBuild's, never a second race-phase read. An athlete whose
-// endurance role is `none` gets nothing here, and so does anyone without a dated race.
+// endurance role is `none` gets nothing here; anyone without a dated race gets only the
+// standing eve (rule 3b).
 // These leg trims are the ONLY strength change a race build makes for a strength-led
 // athlete — the phase's strength principle itself (progression vs maintenance) has one
 // source, race-strength.ts, and for a strength-led athlete the upper body keeps
@@ -102,6 +129,17 @@ const RACE_WEEK_REDUCED: ReadonlySet<string> = new Set(["calves", "core"]);
 // The race-build week kinds / phases in which a key run is protected on its eve.
 const EVE_WEEK_KINDS: ReadonlySet<string> = new Set(["build", "down", "peak"]);
 const EVE_PHASES: ReadonlySet<string> = new Set(["build", "sharpen", "taper"]);
+// How far ahead a key run may land for today to be its eve: inside a race build, up to
+// two days when tomorrow holds no lifting; outside one (the standing eve), the next day
+// only — the 24 h before a quality or long run, the window the concurrent-training
+// evidence speaks to (interference is driven by proximity and volume).
+export const KEY_RUN_EVE_MAX_DAYS = 2;
+export const STANDING_EVE_MAX_DAYS = 1;
+// The weekly heavy lower anchor: at least this many squat/hinge sessions a week keep
+// their full prescribed load and set count whatever the eve asks (one heavy exposure a
+// week maintains maximal strength when intensity is kept). The eve's guard code.
+export const WEEKLY_HEAVY_LOWER_ANCHOR_MIN = 1;
+export const WEEKLY_HEAVY_ANCHOR_KEPT = "weekly_heavy_anchor_kept";
 
 // The snapshot slice (`DailyDecisionSnapshot.stress_budget`). Fingerprinted: keep it
 // compact, JSON-only, and stable for a given day's inputs.
@@ -110,8 +148,13 @@ export interface StressBudgetSnapshot {
   race_week_kind?: string;
   race_phase?: string;
   days_to_race?: number;
-  // The next PLACED key run when today is the last lift day before it (≤ two days out).
+  // The next PLACED key run when today is the last lift day before it (≤ two days out
+  // inside a race build; tomorrow only outside one — no `race_week_kind` on the slice).
   key_run?: { kind: "quality" | "long"; in_days: 1 | 2 };
+  // Beside `key_run` only: today is the week's last chance at a heavy lower anchor
+  // exposure (none landed earlier this week, no later heavy-lower day laid) — the eve
+  // passes over every squat/hinge main lift and its group (WEEKLY_HEAVY_LOWER_ANCHOR_MIN).
+  heavy_lower_last?: true;
   // Inside the post-race recovery window (race-recovery.ts): the day of it, its length
   // and the first ordinary day again. When present, nothing else is on the slice.
   race_recovery?: { day_index: number; days: number; back_on: string; event: string | null };
@@ -186,12 +229,24 @@ export function stressBudgetSnapshot(date: string, ctx: StressBudgetGatherContex
   if (ctx.enduranceRole === "none") return undefined;
   const lowerOnCard = [...groups].some((g) => LOWER_GROUPS.has(g));
   if (!lowerOnCard && !groups.has("core")) return undefined;
-  const key = `${date}|${lowerOnCard ? "legs" : "core"}|${localDateISO()}|${runDaySteerKey()}|${coachContextBackstopSignature()}`;
+  // A squat/hinge main lift on the card: only then can the weekly anchor guard matter.
+  const lowerMainOnCard = (Array.isArray(ctx.planItems) ? ctx.planItems : []).some((it) => {
+    const group = itemGroup(it);
+    return group != null && isLowerMainLift(String(it?.exercise ?? ""), group);
+  });
+  const key = [
+    date,
+    lowerOnCard ? "legs" : "core",
+    lowerMainOnCard ? "main" : "-",
+    localDateISO(),
+    runDaySteerKey(),
+    coachContextBackstopSignature(),
+  ].join("|");
   if (stressReadCache.has(key)) {
     const hit = stressReadCache.get(key);
     return hit ? structuredClone(hit) : undefined;
   }
-  const value = stressRaceRead(date, lowerOnCard);
+  const value = stressRaceRead(date, lowerOnCard, lowerMainOnCard);
   if (stressReadCache.size >= STRESS_READ_MEMO_SLOTS) {
     const oldest = stressReadCache.keys().next().value;
     if (oldest !== undefined) stressReadCache.delete(oldest);
@@ -200,21 +255,67 @@ export function stressBudgetSnapshot(date: string, ctx: StressBudgetGatherContex
   return value;
 }
 
-function stressRaceRead(date: string, lowerOnCard: boolean): StressBudgetSnapshot | undefined {
-  // Cheap guard first: raceBuild and the run engine are only asked with a dated race.
+function stressRaceRead(date: string, lowerOnCard: boolean, lowerMainOnCard: boolean): StressBudgetSnapshot | undefined {
+  // The race read is only asked with a dated race; without one (or before the build
+  // proper, in its base phase) the STANDING eve below is the only rule that can speak.
   const goal = safeRead(() => getEnduranceGoal(date));
-  if (!goal?.is_race || !goal.date) return undefined;
-
+  if (!lowerOnCard && !(goal?.is_race && goal.date)) return undefined;
   const weekPlan = safeRead(() => weeklyRunPlan(date, { adjustToday: false }));
-  const build = raceBuild(date, { runPlan: weekPlan, weekLayout: null, templateRing: true });
-  if (!build.available || !build.race) return undefined;
-  const week = build.weeks.find((w) => w.current) ?? null;
-  if (!week) return undefined;
-  const base = { race_week_kind: week.kind, race_phase: week.phase, days_to_race: build.race.days_to_race };
-  if (week.kind === "taper") return lowerOnCard ? base : undefined;
-  if (week.kind === "race") return base;
+  if (goal?.is_race && goal.date) {
+    const build = safeRead(() => raceBuild(date, { runPlan: weekPlan, weekLayout: null, templateRing: true }));
+    const week = build?.available && build.race ? (build.weeks.find((w) => w.current) ?? null) : null;
+    if (build?.race && week) {
+      const base = { race_week_kind: week.kind, race_phase: week.phase, days_to_race: build.race.days_to_race };
+      if (week.kind === "taper") return lowerOnCard ? base : undefined;
+      if (week.kind === "race") return base;
+      if (EVE_WEEK_KINDS.has(week.kind) && EVE_PHASES.has(week.phase)) {
+        if (!lowerOnCard) return undefined;
+        const eve = keyRunEveRead(date, weekPlan, KEY_RUN_EVE_MAX_DAYS);
+        return eve ? { ...base, key_run: eve, ...heavyLowerGuard(date, lowerMainOnCard) } : undefined;
+      }
+    }
+  }
+  // ---- the STANDING eve: no race build running ----
+  // Next day only (STANDING_EVE_MAX_DAYS), and lower accessories only — the decide half
+  // reads the absence of `race_week_kind` as "outside a build".
+  if (!lowerOnCard) return undefined;
+  const eve = keyRunEveRead(date, weekPlan, STANDING_EVE_MAX_DAYS);
+  return eve ? { key_run: eve, ...heavyLowerGuard(date, lowerMainOnCard) } : undefined;
+}
 
-  if (!lowerOnCard || !EVE_WEEK_KINDS.has(week.kind) || !EVE_PHASES.has(week.phase)) return undefined;
+// The week's last chance at a heavy lower anchor exposure (WEEKLY_HEAVY_LOWER_ANCHOR_MIN):
+// no genuinely loaded lower session has landed earlier this week, and the lifting week
+// lays no later heavy-lower day before Sunday. Read off the same week reads the weekly
+// lower guarantee uses (plan-selection.ts `weeklyLowerExposure`); with no lifting week
+// known, off the log and the forward projection of the strength ring. Fail-soft to
+// "not last" — a read we cannot make never guards (and never trims more either: the
+// guard only ever passes work over).
+function heavyLowerGuard(date: string, lowerMainOnCard: boolean): { heavy_lower_last?: true } {
+  if (!lowerMainOnCard) return {};
+  const last = safeRead(() => {
+    const week = weeklyLowerExposure(date);
+    // Today is needed when what landed plus what is still laid ahead falls short.
+    if (week) return (week.fulfilled_on ? 1 : 0) + week.later_lower_dates.length < WEEKLY_HEAVY_LOWER_ANCHOR_MIN;
+    let count = fullLoadLowerSessionThisWeek(date) != null ? 1 : 0;
+    const monday = mondayOf(date);
+    for (let ahead = 1; ahead <= 6; ahead++) {
+      const iso = addDaysISO(date, ahead);
+      if (!iso || mondayOf(iso) !== monday) break;
+      const day = strengthPlanDayOn(iso);
+      if (day && isHeavyLowerPlanDay(day)) count++;
+    }
+    return count < WEEKLY_HEAVY_LOWER_ANCHOR_MIN;
+  });
+  return last === true ? { heavy_lower_last: true } : {};
+}
+
+// The next PLACED key run when `date` is the last lift day before it, at most `maxDays`
+// out, not already run this week. Shared by the in-build and the standing eve.
+function keyRunEveRead(
+  date: string,
+  weekPlan: WeeklyRunPlan | null,
+  maxDays: 1 | 2
+): { kind: "quality" | "long"; in_days: 1 | 2 } | undefined {
   const planFor = (iso: string): WeeklyRunPlan | null =>
     mondayOf(iso) === mondayOf(date) ? weekPlan : safeRead(() => weeklyRunPlan(iso, { adjustToday: false }));
   // A placed key run already RUN this week (a Thursday quality session done on Tuesday)
@@ -229,7 +330,8 @@ function stressRaceRead(date: string, lowerOnCard: boolean): StressBudgetSnapsho
   const tomorrow = addDaysISO(date, 1);
   if (!tomorrow) return undefined;
   const tomorrowRun = placedKeyRunOn(tomorrow, planFor(tomorrow));
-  if (tomorrowRun && !alreadyRun(tomorrow, tomorrowRun)) return { ...base, key_run: { kind: tomorrowRun, in_days: 1 } };
+  if (tomorrowRun && !alreadyRun(tomorrow, tomorrowRun)) return { kind: tomorrowRun, in_days: 1 };
+  if (maxDays < 2) return undefined;
   // A key run already done off tomorrow's slot leaves tomorrow empty of one — it does
   // not end the look-ahead: the long run the day after still has today as its eve.
   // The day after tomorrow counts only when tomorrow holds no lifting: today is then
@@ -238,7 +340,7 @@ function stressRaceRead(date: string, lowerOnCard: boolean): StressBudgetSnapsho
   const dayAfter = addDaysISO(date, 2);
   if (!dayAfter) return undefined;
   const laterRun = placedKeyRunOn(dayAfter, planFor(dayAfter));
-  return laterRun && !alreadyRun(dayAfter, laterRun) ? { ...base, key_run: { kind: laterRun, in_days: 2 } } : undefined;
+  return laterRun && !alreadyRun(dayAfter, laterRun) ? { kind: laterRun, in_days: 2 } : undefined;
 }
 
 /**
@@ -308,6 +410,18 @@ export interface DailyDecisionStress {
   // — no set trim, no progression hold. Only while its group is in `sole_reduced`; a
   // group another rule reduced clamps the anchor too. Omit-when-idle.
   hold_exercise?: string;
+  // The STANDING eve (no race build): the trim is ITEM-scoped. Inside a `sole_reduced`
+  // group only the items named in `trim_exercises` (lower accessories) lose a set — one
+  // set each, at their load (`max(floor, sets − 1)`, daily-composition.ts); every other
+  // item in that group (an RDL beside the leg curl) is passed over exactly like
+  // `hold_exercise`. Omit-when-idle; the in-build eve carries neither and keeps its
+  // group-level trim.
+  scope?: "standing";
+  trim_exercises?: string[];
+  // The weekly heavy lower anchor guard spoke (WEEKLY_HEAVY_ANCHOR_KEPT): these groups'
+  // squat/hinge work kept every set. Informational: they are in no reduced list.
+  guard?: typeof WEEKLY_HEAVY_ANCHOR_KEPT;
+  guard_groups?: string[];
 }
 
 export interface StressBudgetDecisionContext {
@@ -353,6 +467,14 @@ export interface StressBudgetDecision {
   // The anchor lift the trim passes over (the key-run eve), present only when one of
   // the reduced groups is the anchor's own. See DailyDecisionStress.hold_exercise.
   hold_exercise?: string;
+  // The eve outside a race build: lower accessories only, tomorrow's run only — and
+  // item-scoped: only `trim_exercises` lose a set; a compound in the same group stays whole.
+  scope?: "standing";
+  trim_exercises?: string[];
+  // The weekly heavy lower anchor guard spoke (WEEKLY_HEAVY_ANCHOR_KEPT): today is the
+  // week's last heavy lower exposure, so these groups' squat/hinge work keeps every set.
+  guard?: typeof WEEKLY_HEAVY_ANCHOR_KEPT;
+  guard_groups?: string[];
 }
 
 // ---- athlete-facing lines (every one through pickDayVariant; grammar-clean) ----
@@ -390,6 +512,32 @@ export const KEY_RUN_EVE_RATIONALE: readonly [EveLine, ...EveLine[]] = [
     `A key ${run} lands ${when}, so the extra leg work stops early today while keeping its weights, and the main lift goes as planned.`,
 ];
 
+// The STANDING eve (no race build): only the small leg lifts lose a set; every squat,
+// hinge and lunge stays as written.
+export const KEY_RUN_EVE_STANDING_RATIONALE: readonly [EveLine, ...EveLine[]] = [
+  (run, when) =>
+    `With the ${run} ${when}, the small leg lifts take fewer sets today at the same weights; squats, hinges and lunges stay as written.`,
+  (run, when) =>
+    `The ${run} ${when} gets fresher legs if the leg extras stop a little early today — same weights, and the big leg lifts keep every set.`,
+  (run, when) =>
+    `Fewer sets on the leg isolation work today, weights unchanged, so the ${run} ${when} starts on fresher legs; the main leg lifts are untouched.`,
+  (run, when) =>
+    `A ${run} lands ${when}, so the smaller leg lifts end a set early today while the heavy leg work goes as planned.`,
+];
+
+// The weekly heavy lower anchor guard spoke: today is the week's one remaining heavy leg
+// session, so its squats and hinges keep every set even on the eve of a key run.
+export const KEY_RUN_EVE_ANCHOR_KEPT_RATIONALE: readonly [EveLine, ...EveLine[]] = [
+  (run, when) =>
+    `With the ${run} ${when}, the small leg lifts take fewer sets today — but this is the week's one heavy leg session, so the squats and hinges keep every set.`,
+  (run, when) =>
+    `Today is the only heavy leg day left this week, so the main leg lifts stay whole; only the extras shorten ahead of the ${run} ${when}.`,
+  (run, when) =>
+    `The ${run} ${when} asks for fresh legs, and the week still needs its one heavy leg session: the big lifts keep their sets, the smaller ones stop early.`,
+  (run, when) =>
+    `Heavy legs once a week keeps the strength, and today is that day — the squats and hinges go as written, the leg extras ease off for the ${run} ${when}.`,
+];
+
 // The note a composed card item carries when ONLY this budget reduced its group
 // (`stress.sole_reduced`). The generic reduced-area note says the area is still carrying
 // recent work — false here: these legs are fresh, and it is the race build easing them.
@@ -407,6 +555,14 @@ export const RACE_WEEK_ITEM_NOTES: readonly [string, ...string[]] = [
   "Just a little light work here this week; the race is what the legs are saving for.",
   "Easy and brief in race week, enough to keep it moving without spending the legs.",
   "Race week: a lighter touch and fewer sets, so the start line finds you fresh.",
+];
+
+// The STANDING eve's item note: exactly one set off, the weight unchanged.
+export const KEY_RUN_EVE_STANDING_ITEM_NOTES: readonly [string, ...string[]] = [
+  "One set fewer today at the same weight, so tomorrow's run starts on fresher legs.",
+  "Same weight, one set less — tomorrow's key run gets the legs a little fresher.",
+  "Stopping a set early on this one, weight unchanged, with tomorrow's run in mind.",
+  "A set shorter today at your usual weight, so the legs keep something for tomorrow's run.",
 ];
 
 export const KEY_RUN_EVE_ITEM_NOTES: readonly [string, ...string[]] = [
@@ -437,11 +593,11 @@ export const POST_RACE_RECOVERY_ITEM_NOTES: readonly [string, ...string[]] = [
 ];
 
 /** The per-item note set for a stress-budget-only reduction, by the rule that spoke. */
-export function stressBudgetItemNotes(code: unknown): readonly [string, ...string[]] | null {
+export function stressBudgetItemNotes(code: unknown, scope?: unknown): readonly [string, ...string[]] | null {
   if (code === "post_race_recovery") return POST_RACE_RECOVERY_ITEM_NOTES;
   if (code === "race_taper_legs") return RACE_TAPER_ITEM_NOTES;
   if (code === "race_week_legs") return RACE_WEEK_ITEM_NOTES;
-  if (code === "key_run_eve") return KEY_RUN_EVE_ITEM_NOTES;
+  if (code === "key_run_eve") return scope === "standing" ? KEY_RUN_EVE_STANDING_ITEM_NOTES : KEY_RUN_EVE_ITEM_NOTES;
   return null;
 }
 
@@ -524,6 +680,13 @@ export function stressBudgetDecision(
   const keyRun = snapshot.key_run;
   if (!keyRun || (keyRun.kind !== "quality" && keyRun.kind !== "long")) return EMPTY;
   if (ctx.lowerWeekHolds || ctx.lowerSafetyFloor) return EMPTY;
+  // The athlete asked for today's session as it is (daily-decision.ts
+  // `request.same_day_request`): a lift asked for today is never trimmed on any card.
+  if (ctx.snapshot?.request?.same_day_request) return EMPTY;
+  // Outside a race build (no week kind on the slice) the eve is the STANDING one:
+  // tomorrow only, lower ACCESSORIES only (never a compound), sets only.
+  const standing = snapshot.race_week_kind == null;
+  if (standing && keyRun.in_days > STANDING_EVE_MAX_DAYS) return EMPTY;
   // The endurance-led key-run protect (daily-decision) already lightens every lower
   // group for an open key run today or tomorrow — one rule speaks for that run.
   const leads = ctx.enduranceRole === "primary" || ctx.enduranceRole === "co_primary";
@@ -538,37 +701,92 @@ export function stressBudgetDecision(
     return EMPTY;
   }
   // Item-scoped: the groups of every lower item on the card except the anchor itself.
+  // The trim speaks through GROUPS (composition clamps a reduced group's items), so a
+  // group is trimmed only when every item it would clamp may be trimmed — the anchor is
+  // passed over by name (`hold_exercise`), anything else in the group must qualify.
   const anchorName = ctx.anchor?.exercise ? String(ctx.anchor.exercise).trim().toLowerCase() : null;
   const anchorGroup = ctx.anchor?.muscle_group ? String(ctx.anchor.muscle_group).toLowerCase() : null;
-  const accessory = [
-    ...new Set(
-      (ctx.planItems ?? [])
-        .filter(
-          (it) =>
-            String(it.kind ?? "").toLowerCase() !== "cardio" &&
-            !!it.muscle_group &&
-            String(it.exercise ?? "")
-              .trim()
-              .toLowerCase() !== anchorName
-        )
-        .map((it) => String(it.muscle_group).toLowerCase())
-    ),
-  ].filter((g) => lowerOnDay.includes(g) && !ctx.weekHeldGroups.has(g));
+  const guard = snapshot.heavy_lower_last === true;
+  const strengthItems = (ctx.planItems ?? []).filter(
+    (it) => String(it.kind ?? "").toLowerCase() !== "cardio" && !!it.muscle_group
+  );
+  const accessory: string[] = [];
+  const keptByGuard: string[] = [];
+  // The standing eve's item-scoped list: the accessories that lose a set.
+  const trimExercises: string[] = [];
+  for (const group of lowerOnDay) {
+    if (ctx.weekHeldGroups.has(group)) continue;
+    const others = strengthItems.filter(
+      (it) =>
+        String(it.muscle_group).toLowerCase() === group &&
+        String(it.exercise ?? "")
+          .trim()
+          .toLowerCase() !== anchorName
+    );
+    if (!others.length) continue;
+    // Standing: lower ACCESSORIES only, ITEM-scoped. The group reads reduced for the
+    // accessories in it, and every compound beside them (an RDL beside the leg curl) is
+    // passed over by name (`trim_exercises`). A compound is never trimmed here, so the
+    // heavy lower anchor guard has nothing to keep on the standing eve.
+    if (standing) {
+      const trims = others.filter((it) => isLowerAccessoryItem(it, group));
+      if (!trims.length) continue;
+      for (const it of trims) trimExercises.push(String(it.exercise ?? "").trim());
+      accessory.push(group);
+      continue;
+    }
+    // The week's last heavy lower exposure: a squat/hinge main lift the trim would reach
+    // (any but the anchor it already passes over) keeps its group whole.
+    if (guard && others.some((it) => isLowerMainLift(String(it.exercise ?? ""), group))) {
+      keptByGuard.push(group);
+      continue;
+    }
+    accessory.push(group);
+  }
   if (!accessory.length) return EMPTY;
   const holdExercise =
     ctx.anchor?.exercise && anchorGroup && accessory.includes(anchorGroup) ? String(ctx.anchor.exercise) : null;
   const run = keyRun.kind === "long" ? "long run" : "quality run";
   const when = keyRun.in_days === 1 ? "tomorrow" : "in two days";
+  const lines = keptByGuard.length
+    ? KEY_RUN_EVE_ANCHOR_KEPT_RATIONALE
+    : standing
+      ? KEY_RUN_EVE_STANDING_RATIONALE
+      : KEY_RUN_EVE_RATIONALE;
+  const variantKey = keptByGuard.length
+    ? "stress_budget:key_run_eve:anchor_kept"
+    : standing
+      ? "stress_budget:key_run_eve:standing"
+      : "stress_budget:key_run_eve";
   return {
     code: "key_run_eve",
     load_held: true,
     ...(holdExercise ? { hold_exercise: holdExercise } : {}),
+    ...(standing ? { scope: "standing" as const, trim_exercises: [...new Set(trimExercises)] } : {}),
+    ...(keptByGuard.length ? { guard: WEEKLY_HEAVY_ANCHOR_KEPT, guard_groups: keptByGuard } : {}),
     reduced: accessory,
     excluded: [],
-    rationale: pickDayVariant(KEY_RUN_EVE_RATIONALE, ctx.date, "stress_budget:key_run_eve")(run, when),
-    soft: `Last lift day before the placed ${keyRun.kind} run — lower accessory sets trimmed, load held (${accessory.join(", ")})${
-      ctx.anchor ? `; ${ctx.anchor.exercise} keeps its full session` : ""
-    }`,
+    rationale: pickDayVariant(lines, ctx.date, variantKey)(run, when),
+    soft: [
+      `Last lift day before the placed ${keyRun.kind} run${standing ? " (no race build)" : ""}`,
+      standing
+        ? ` — one set off each lower accessory, load held (${[...new Set(trimExercises)].join(", ")})`
+        : ` — lower non-anchor sets trimmed, load held (${accessory.join(", ")})`,
+      ctx.anchor ? `; ${ctx.anchor.exercise} keeps its full session` : "",
+      keptByGuard.length
+        ? `; ${WEEKLY_HEAVY_ANCHOR_KEPT}: the week's last heavy lower exposure keeps every set (${keptByGuard.join(", ")})`
+        : "",
+    ].join(""),
     excluded_note: null,
   };
+}
+
+// A lower item the STANDING eve may trim: isolation/core tier work (a leg extension, a
+// leg curl, a calf raise) — never a squat, hinge, lunge, hip thrust or carry, and never
+// a squat/hinge main lift whatever its tier reads.
+type BudgetItem = { exercise?: string | null; muscle_group?: string | null; kind?: string | null; note?: string | null };
+function isLowerAccessoryItem(it: BudgetItem, group: string): boolean {
+  if (isLowerMainLift(String(it.exercise ?? ""), group)) return false;
+  const tier = planItemEffectTier(it);
+  return tier === PLAN_ITEM_EFFECT_TIER.isolation || tier === PLAN_ITEM_EFFECT_TIER.core;
 }

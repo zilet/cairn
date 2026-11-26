@@ -51,9 +51,16 @@
 //      group's habitual weekly effective sets over the same 56-day window, none on record
 //      meaning no step) and at most twenty (weeklyGroupHasRoom) — `group_habit_bound`.
 //   4. Tolerance vouches: volumeToleranceRead (every authored set carried at a held-or-rising
-//      load), the group's lifts progressing or maintaining with none regressing and none
-//      plateaued-and-grinding (program state), and the last fourteen days harm-free on the
-//      days the group was trained (harmEvidenceOnDay — never re-derived).
+//      load), and the last fourteen days harm-free on the days the group was trained
+//      (harmEvidenceOnDay — never re-derived). The group's PROGRESS is read per movement
+//      unit (the capability read in program state, capability-consumers.ts
+//      volumeStepUnitRead): no in-plan unit carrying the group may be slipping (more volume
+//      is the wrong lever for a slide), no lift of the group may be plateaued and grinding
+//      (recovery is not keeping up), and the group earns the set only through an in-plan
+//      unit HOLDING on enough evidence (VOLUME_STEP_MIN_UNIT_EXPOSURES) with no cut, run
+//      build or lighter week explaining it — a climbing unit needs nothing. The set goes to
+//      a plan lift of that holding unit. Added volume helps a plateau only when recovery is
+//      adequate, never a regression.
 //   5. Settling: the group's previous volume step (and any coverage change on it) has been
 //      trained at least twice since it landed — or six weeks passed — and, for a volume step
 //      (which may sit above the habit), those first two sessions carried every written set of
@@ -61,7 +68,9 @@
 //      (`step_not_carried`, status settling). The earlier step is never reverted from here.
 //   6. Holds, and lift-level exclusions: open pain or an injury the lift loads, a constraint
 //      note, a slot nothing has been trained at since it was written (testedSlotAuthorship),
-//      today's session already composed on that plan day.
+//      today's session already composed on that plan day, and a plateau-ladder change on the
+//      lift that is open or landed this week (lift-structural-change.ts: one server-owned
+//      structural change per lift per week, whichever came first — re-checked at landing).
 //   7. Any read failing means `unavailable` and nothing changes.
 //
 // The landing waits for a natural boundary: never into a session already started
@@ -105,6 +114,9 @@ import {
 import { activeCompositionPlanDayNumber } from "../../repo/adaptive-session.js";
 import { createProposal, getProposal, setProposalStatus } from "../../repo/proposals.js";
 import { getProgramState } from "../../repo/program-state.js";
+import { type ProgramCapability, volumeStepUnitRead } from "../../repo/capability-consumers.js";
+import { capabilityUnitOf } from "../../repo/strength-capability.js";
+import { otherStructuralChangeOnLift, STRUCTURAL_CHANGE_AGENTS } from "../../repo/lift-structural-change.js";
 import { inRaceRecovery } from "../../repo/race-recovery.js";
 import { recoveryWeekStatus } from "../../repo/recovery-week.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "../../repo/exercise-variations.js";
@@ -150,18 +162,28 @@ export type VolumeStepBlock =
   | "pain"
   | "injury"
   | "constraint_note"
-  | "regressing_lift"
+  // A movement unit carrying the group is slipping (capability read): more volume is the
+  // wrong lever for a slide.
+  | "unit_slipping"
   | "plateau_grinding"
   | "recent_harm"
   | "untested_slot"
   | "session_composed"
+  // The plateau ladder has an open change on this lift, or one landed this calendar week:
+  // one server-owned structural change per lift per week (lift-structural-change.ts).
+  | "lift_changed_this_week"
   | "declined"
   | "step_not_carried"
   | "settling"
   | "at_ceiling"
   | "weekly_bound"
   | "group_habit_bound"
-  | "not_progressing"
+  // The group's units are climbing (they need nothing), held by the cut / run build /
+  // lighter week, or not read yet; or this lift's unit is not the holding one.
+  | "unit_climbing"
+  | "unit_explained"
+  | "unit_unread"
+  | "unit_not_holding"
   | "no_habit"
   | "below_floor"
   | "timed_lift"
@@ -386,18 +408,22 @@ const BLOCK_PRECEDENCE: readonly VolumeStepBlock[] = [
   "pain",
   "injury",
   "constraint_note",
-  "regressing_lift",
+  "unit_slipping",
   "plateau_grinding",
   "recent_harm",
   "untested_slot",
   "session_composed",
+  "lift_changed_this_week",
   "declined",
   "step_not_carried",
   "settling",
   "at_ceiling",
   "weekly_bound",
   "group_habit_bound",
-  "not_progressing",
+  "unit_explained",
+  "unit_climbing",
+  "unit_not_holding",
+  "unit_unread",
   "no_habit",
   "below_floor",
   "timed_lift",
@@ -407,7 +433,10 @@ const QUIET_BLOCKS: ReadonlySet<VolumeStepBlock> = new Set([
   "at_ceiling",
   "weekly_bound",
   "group_habit_bound",
-  "not_progressing",
+  "unit_explained",
+  "unit_climbing",
+  "unit_not_holding",
+  "unit_unread",
   "no_habit",
   "below_floor",
   "timed_lift",
@@ -429,6 +458,17 @@ interface StepRow {
   group: string;
   intent: string;
   created: string;
+}
+
+// created_at is SQLite's UTC datetime('now'); the pass compares it with the athlete's local
+// day, so it is read as a UTC instant and dated locally (late in the evening west of UTC the
+// raw slice was already tomorrow, and "one group a calendar week" missed today's step).
+function localCreatedDay(createdAt: unknown): string {
+  const raw = String(createdAt ?? "").trim();
+  const instant = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(raw)
+    ? new Date(`${raw.replace(" ", "T")}${/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw) ? "" : "Z"}`)
+    : null;
+  return instant && Number.isFinite(instant.getTime()) ? localDateISO(instant) : raw.slice(0, 10);
 }
 
 /** Every volume-step draft that is open or answered, newest first. Null when the read failed. */
@@ -467,7 +507,7 @@ function volumeStepRows(): StepRow[] | null {
         answer,
         group: String(parsed?.volume_step?.group ?? ""),
         intent: String(parsed?.volume_step?.intent ?? ""),
-        created: String(row.created_at ?? "").slice(0, 10),
+        created: localCreatedDay(row.created_at),
       };
     });
   } catch {
@@ -685,32 +725,56 @@ function groupHarmFree(group: string, date: string): boolean {
   return true;
 }
 
-interface LiftRead {
-  status: string;
-  grinding: boolean;
+// What the program state says about the group's movement: the capability summary (progress
+// per movement unit and muscle) and the in-rotation lifts' grinding tells. Read once a pass.
+// A read that throws throws (fail closed); an unavailable capability read earns nothing.
+interface ProgressReads {
+  capability: ProgramCapability | null;
+  /** In-rotation lifts (never a resting one) whose own log reads plateaued and grinding. */
+  grinding: Array<{ group: string | null }>;
 }
 
-// The program-state lift grades by identity, and the group's lifts. A resting lift (off the
-// plan, not trained lately) is out of the rotation and never blocks a group.
-function liftReads(date: string): Array<{ identity: string; group: string | null; read: LiftRead }> {
-  return (getProgramState(date).lifts ?? []).filter((lift: any) => lift?.resting !== true).map((lift: any) => ({
-    identity: liftIdentity(String(lift.exercise)),
-    group: primaryMuscleGroup(String(lift.exercise), lift.muscle_group == null ? null : String(lift.muscle_group)),
-    read: {
-      status: String(lift.status ?? ""),
-      grinding: (Array.isArray(lift.stall_signals) ? lift.stall_signals : []).some((s: unknown) =>
-        /grinding/i.test(String(s))
-      ),
-    },
-  }));
+function progressReads(date: string): ProgressReads {
+  const state = getProgramState(date);
+  return {
+    capability: state.capability ?? null,
+    grinding: (state.lifts ?? [])
+      .filter(
+        (lift: any) =>
+          lift?.resting !== true &&
+          lift?.status === "plateaued" &&
+          (Array.isArray(lift.stall_signals) ? lift.stall_signals : []).some((s: unknown) => /grinding/i.test(String(s)))
+      )
+      .map((lift: any) => ({
+        group: primaryMuscleGroup(String(lift.exercise), lift.muscle_group == null ? null : String(lift.muscle_group)),
+      })),
+  };
 }
 
-// A group-level block from the lift grades: a regressing lift, or one plateaued and grinding.
-function groupLiftBlock(group: string, reads: ReturnType<typeof liftReads>): VolumeStepBlock | null {
-  const mine = reads.filter((r) => r.group === group);
-  if (mine.some((r) => r.read.status === "regressing")) return "regressing_lift";
-  if (mine.some((r) => r.read.status === "plateaued" && r.read.grinding)) return "plateau_grinding";
-  return null;
+// The group's condition, over MOVEMENT UNITS (capability-consumers.ts volumeStepUnitRead):
+// a slipping unit carrying the group blocks it (more volume is the wrong lever for a
+// slide); the group earns a set only through an in-plan unit HOLDING on enough evidence
+// with no cut, run build or lighter week to explain it — a climbing unit needs nothing.
+// Beside it, one recovery tell kept from the lifts: a lift of the group plateaued AND
+// grinding says recovery is not keeping up, and added volume helps a plateau only when it
+// is. Returns the block and the units that may take the set.
+function groupProgressBlock(group: string, reads: ProgressReads): { block: VolumeStepBlock | null; earning: string[] } {
+  const unit = volumeStepUnitRead(reads.capability, group);
+  if (unit.block === "unit_slipping") return { block: "unit_slipping", earning: [] };
+  if (reads.grinding.some((r) => r.group === group)) return { block: "plateau_grinding", earning: [] };
+  return { block: unit.block, earning: unit.earning };
+}
+
+// The movement unit a plan lift belongs to (the capability read's own identity), or null.
+function planLiftUnit(lift: PlanLift): string | null {
+  try {
+    const resolved = resolveExerciseName(lift.exercise);
+    const row = storedExerciseRow(lift.exercise);
+    const group = lift.stored_group ?? (row?.muscle_group == null ? null : String(row.muscle_group));
+    return capabilityUnitOf(resolved.canonical || lift.exercise, group)?.key ?? null;
+  } catch {
+    return null;
+  }
 }
 
 interface PlanLift {
@@ -778,7 +842,7 @@ interface LiftVerdict {
 function judgeLift(
   lift: PlanLift,
   date: string,
-  reads: ReturnType<typeof liftReads>,
+  earning: ReadonlySet<string>,
   loads: { injury: (n: string, g: string | null) => boolean; pain: (n: string, g: string | null) => boolean },
   composedDay: number | null
 ): LiftVerdict {
@@ -789,10 +853,15 @@ function judgeLift(
   if (loads.pain(lift.exercise, group)) return { block: "pain" };
   if (loads.injury(lift.exercise, group)) return { block: "injury" };
   if (composedDay != null && composedDay === lift.day_number) return { block: "session_composed" };
+  // One server-owned structural change per lift per week: the plateau ladder's open or
+  // landed-this-week change on this lift came first.
+  if (otherStructuralChangeOnLift([lift.exercise], date, { self: STRUCTURAL_CHANGE_AGENTS.volume_step }))
+    return { block: "lift_changed_this_week" };
   if (slotUntested(lift, date)) return { block: "untested_slot" };
-  const identity = liftIdentity(lift.exercise);
-  const grade = reads.find((r) => r.identity === identity)?.read.status;
-  if (grade !== "progressing" && grade !== "maintaining") return { block: "not_progressing" };
+  // The set goes to a lift of a HOLDING unit: one whose movement is not moving with recovery
+  // intact. A lift of a climbing unit (or one the read cannot place) is left as it is.
+  const unit = planLiftUnit(lift);
+  if (!unit || !earning.has(unit)) return { block: "unit_not_holding" };
   const habitual = habitualWorkingSetCountBefore(lift.exercise, date);
   if (habitual == null) return { block: "no_habit" };
   // One set above the habit, never past five (LIFT_STEP_CAP's comment says why not the floor).
@@ -816,13 +885,14 @@ const ACTS: ReadonlyArray<(group: string, lift: string) => string> = [
   (group, lift) =>
     `You have carried every planned set of your ${group} lifts at the same weight or heavier, so there is room for one more set of ${lift}. Undo takes it back out.`,
   (group, lift) =>
-    `Your recent sessions held every set at a steady or rising load, so your ${group} can take one more set of ${lift}; Undo puts it back as it was.`,
+    // Never "recent": proposal-truth.ts re-dates that word in a stored draft into a numbered date.
+    `Your sessions lately held every set at a steady or rising load, so your ${group} can take one more set of ${lift}; Undo puts it back as it was.`,
 ];
 
 // The asking register: only when server policy holds the step for a yes.
 const OFFERS: ReadonlyArray<(group: string, lift: string) => string> = [
   (group, lift) =>
-    `Your recent sessions carried every set of your ${group} work at a held or rising load, so one more set of ${lift} would fit. It is yours to take or leave.`,
+    `Your sessions lately carried every set of your ${group} work at a held or rising load, so one more set of ${lift} would fit. It is yours to take or leave.`,
   (group, lift) =>
     `You have been carrying every planned ${group} set at the same weight or heavier; one more set of ${lift} is ready if you want it.`,
   (group, lift) =>
@@ -894,13 +964,18 @@ export function volumeStepProposalPayload(
  * Does a routed volume step still stand on what it was made for? `fits`: its slot still has
  * the set count it was offered against and the change only raises it, no pain or injury
  * touches it, the athlete's intent still names muscle or strength and is the one it was made
- * under, and nothing holds the week, the log still vouches (tolerance, no regressing or
- * grinding lift, a harm-free fortnight) and the group still has room. `gone`: the offer or
- * the intent went stale. `held`: it stands but this is no week to land it. `unknown`: a read
+ * under, and nothing holds the week, the log still vouches (tolerance, a harm-free
+ * fortnight), the step's lift still belongs to a unit that is holding with no slipping unit
+ * or grinding lift in the group (the pass's own unit rule), and the group still has room.
+ * `gone`: the offer or the intent went stale, or the unit is now climbing (it needs nothing). `held`: it stands but this is no week to land it. `unknown`: a read
  * failed, or the payload is too old to carry its basis. The autonomy layer checks this in
  * place of the generic evidence fingerprint (the change edits plan rows and nothing else).
  */
-export function volumeStepStillFits(parsed: any, asOf: string = localDateISO()): VolumeStepPremise {
+export function volumeStepStillFits(
+  parsed: any,
+  asOf: string = localDateISO(),
+  ownId: number | null = null
+): VolumeStepPremise {
   const step = parsed?.volume_step;
   const group = String(step?.group ?? "");
   if (!group || !Array.isArray(step?.basis) || !step.basis.length) return "unknown";
@@ -910,6 +985,17 @@ export function volumeStepStillFits(parsed: any, asOf: string = localDateISO()):
     const fits = coverageOfferStillFits(changes, step.basis, { date });
     if (fits === null) return "unknown";
     if (fits === false) return "gone";
+    // One server-owned structural change per lift per week, whichever came first: a
+    // plateau-ladder change on the lift that landed this week, or that is open and was
+    // written before this step (with no id known, any open one), holds it.
+    if (
+      typeof step.lift === "string" &&
+      otherStructuralChangeOnLift([step.lift], date, {
+        self: STRUCTURAL_CHANGE_AGENTS.volume_step,
+        before: ownId ?? Number.MAX_SAFE_INTEGER,
+      })
+    )
+      return "held";
     const ctx = readVolumeFloorContext(date);
     if (!ctx) return "unknown";
     if (!(ctx.strength_priority || ctx.muscle_priority)) return "gone";
@@ -917,7 +1003,16 @@ export function volumeStepStillFits(parsed: any, asOf: string = localDateISO()):
     if (volumeStepWeekHold(date, ctx)) return "held";
     if (volumeToleranceRead(date) == null) return "held";
     if (!groupHarmFree(group, date)) return "held";
-    if (groupLiftBlock(group, liftReads(date))) return "held";
+    // The same unit rule the pass applies: the step's lift must still belong to a unit
+    // that is holding with recovery intact. A unit now climbing needs nothing (gone); one
+    // slipping, explained or unread holds the step until it is read again.
+    const reads = progressReads(date);
+    const progress = groupProgressBlock(group, reads);
+    const liftUnit = typeof step.lift === "string" ? planLiftUnit({ exercise: step.lift, stored_group: null } as PlanLift) : null;
+    const ownVerdict = reads.capability?.units.find((u) => u.key === liftUnit)?.verdict ?? null;
+    if (progress.block === "unit_climbing" || ownVerdict === "climbing") return "gone";
+    if (progress.block) return "held";
+    if (!liftUnit || !progress.earning.includes(liftUnit)) return "held";
     if (!weeklyGroupHasRoom(weeklyGroupEffectiveSets(date, group), 1)) return "held";
     const planned = plannedWeeklyGroupSets(strengthDays(getPlan() as any[]) as PlanQualityDay[]).get(group as any) ?? 0;
     if (!groupHabitBoundHolds(group, planned, date)) return "held";
@@ -1048,7 +1143,7 @@ function runPass(date: string, act: boolean, dry: boolean): VolumeStepOutcome {
     if (row.status !== "draft") continue;
     const proposal = getProposal(row.id) as any;
     const live = ["review", "pending", "announced"].includes(String(proposal?.autonomy?.status ?? ""));
-    if (!live || volumeStepStillFits(proposal?.parsed, date) === "gone") {
+    if (!live || volumeStepStillFits(proposal?.parsed, date, row.id) === "gone") {
       if (dry) withdrawn.push(row.id);
       else withdraw(row.id, withdrawn);
       continue;
@@ -1123,7 +1218,7 @@ function runPass(date: string, act: boolean, dry: boolean): VolumeStepOutcome {
   const answers = rowsAnswered ? coverageAnswers(rowsAnswered) : null;
   const settling = settlingGroups(date);
   if (!answers || !settling) return outcome("unavailable");
-  const reads = liftReads(date);
+  const reads = progressReads(date);
   const loads = { injury: openInjuryLoads(date), pain: painTouches(date) };
   // The plan day today's active composition was taken from: a lift on it waits.
   const composedDay = activeCompositionPlanDayNumber(date);
@@ -1164,11 +1259,12 @@ function runPass(date: string, act: boolean, dry: boolean): VolumeStepOutcome {
       blocked.push({ group, code: "group_habit_bound" });
       continue;
     }
-    const liftBlock = groupLiftBlock(group, reads);
-    if (liftBlock) {
-      blocked.push({ group, code: liftBlock });
+    const progress = groupProgressBlock(group, reads);
+    if (progress.block) {
+      blocked.push({ group, code: progress.block });
       continue;
     }
+    const earning = new Set(progress.earning);
     if (!groupHarmFree(group, date)) {
       blocked.push({ group, code: "recent_harm" });
       continue;
@@ -1181,7 +1277,7 @@ function runPass(date: string, act: boolean, dry: boolean): VolumeStepOutcome {
     let chosen: { lift: PlanLift; to: number } | null = null;
     const liftBlocks: VolumeStepBlock[] = [];
     for (const lift of lifts) {
-      const verdict = judgeLift(lift, date, reads, loads, composedDay);
+      const verdict = judgeLift(lift, date, earning, loads, composedDay);
       if (verdict.block) {
         liftBlocks.push(verdict.block);
         blocked.push({ group, lift: lift.exercise, code: verdict.block });
@@ -1225,7 +1321,8 @@ export function previewVolumeStep(date?: string): VolumeStepOutcome {
 // speaks its own sentence (autonomy-service.ts registerServerPremise).
 registerServerPremise({
   owns: (proposal) => String(proposal?.agent ?? "") === VOLUME_STEP_AGENT && !!proposal?.parsed?.volume_step,
-  premise: (proposal, asOf) => volumeStepStillFits(proposal.parsed, asOf),
+  premise: (proposal, asOf) =>
+    volumeStepStillFits(proposal.parsed, asOf, Number.isFinite(Number(proposal?.id)) ? Number(proposal.id) : null),
   waits_for_composed_day: true,
   explanation: (proposal) => proposal?.parsed?.volume_step?.explanation,
 });

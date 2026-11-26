@@ -83,6 +83,7 @@ import {
   stressBudgetDecision,
   stressBudgetSnapshot,
   stressBudgetSuspendsWeeklyLower,
+  WEEKLY_HEAVY_ANCHOR_KEPT,
 } from "./stress-budget.js";
 import type { Prescription } from "./progression.js";
 
@@ -125,8 +126,18 @@ import type { Prescription } from "./progression.js";
 // precautionary trim (the learned plan-complexity ease) stands down when the athlete's own
 // log carried the planned sets at a held-or-rising load (`volume_tolerance`). Ordinary
 // days decide differently with no snapshot change, so the version moves.
+//
+// The key-run eve (v9, 2026-11-25): the stress decision gained `scope:"standing"` with
+// `trim_exercises` (an eve with no race build trims named lower ACCESSORIES by one set,
+// item-scoped, compounds passed over) and the weekly heavy lower anchor `guard` /
+// `guard_groups`. The snapshot is unchanged, so a v8 envelope stored earlier for the same
+// inputs would carry the same fingerprint: `recordDailySessionDecision` is idempotent by
+// fingerprint and would never store the new decision beside it, and every reader of the
+// stored envelope (`getLatestDailySessionDecision`: the plan day's leg-trim focus, the
+// training-drive read) would keep the old decision's stress for the rest of that day. The
+// version moves so the fingerprint does.
 
-export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v8";
+export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v9";
 
 export const DAILY_DECISION_REASONS = [
   "injury_exclusion",
@@ -218,6 +229,10 @@ export const DAILY_DECISION_REASONS = [
   // day's work, so there is no lifting card and the lifting caps shut (race-strength.ts:
   // race week's heavy leg work sits out, and race day itself carries no lift).
   "goal_race_day",
+  // The key-run eve's WEEKLY HEAVY LOWER ANCHOR guard (stress-budget.ts
+  // WEEKLY_HEAVY_ANCHOR_KEPT): today is the week's last heavy lower exposure, so the
+  // groups holding its squat/hinge work kept every set while the eve trimmed the rest.
+  "weekly_heavy_anchor_kept",
 ] as const;
 
 // The run day's headline line on the envelope. Rotates like every repeating
@@ -1690,14 +1705,21 @@ function stressSoleReduced(
   stressReduced: readonly string[],
   baseReduced: readonly string[],
   loadHeld: boolean,
-  hold: { exercise: string; group: string | null } | null
-): { sole_reduced?: string[]; load_held?: true; hold_exercise?: string } {
+  hold: { exercise: string; group: string | null } | null,
+  // The standing eve's item scope (stress-budget.ts `scope` / `trim_exercises`), with each
+  // named item's group so only the ones still in a sole group ride along.
+  standingTrim: Array<{ exercise: string; group: string | null }> | null = null
+): Pick<DailyDecisionStress, "sole_reduced" | "load_held" | "hold_exercise" | "scope" | "trim_exercises"> {
   const sole = stressReduced.filter((g) => reduced.includes(g) && !baseReduced.includes(g));
   if (!sole.length) return {};
+  const trims = standingTrim
+    ? [...new Set(standingTrim.filter((t) => t.group && sole.includes(t.group)).map((t) => t.exercise))]
+    : null;
   return {
     sole_reduced: sole,
     ...(loadHeld ? { load_held: true as const } : {}),
     ...(loadHeld && hold && hold.group && sole.includes(hold.group) ? { hold_exercise: hold.exercise } : {}),
+    ...(loadHeld && trims ? { scope: "standing" as const, trim_exercises: trims } : {}),
   };
 }
 
@@ -2626,10 +2648,37 @@ export function buildDailySessionDecision(
       : null;
   const stressReduced = dedupe(stress.code ? stress.reduced.map((g) => String(g).toLowerCase()) : []);
   const stressExcluded = dedupe(stress.code ? stress.excluded.map((g) => String(g).toLowerCase()) : []);
+  // The STANDING eve is item-scoped (stress-budget.ts `trim_exercises`): only the named
+  // accessories lose a set; every other item in a group only this rule reduced — an RDL
+  // beside the leg curl — is passed over exactly like the anchor (`stressHold`).
+  const stressStandingTrim =
+    stress.code && stress.scope === "standing" && Array.isArray(stress.trim_exercises)
+      ? stress.trim_exercises.map((name) => {
+          const item = snapshot.plan_items.find((it) => it.exercise.toLowerCase() === String(name).toLowerCase());
+          return {
+            exercise: String(name),
+            group: item?.muscle_group ? String(item.muscle_group).toLowerCase() : null,
+          };
+        })
+      : null;
+  const stressTrimNames = stressStandingTrim ? new Set(stressStandingTrim.map((t) => t.exercise.toLowerCase())) : null;
   if (stress.code && (stressReduced.length || stressExcluded.length)) {
     fire(precedence, stress.code);
     if (stress.soft) soft.push({ code: stress.code, detail: stress.soft });
     if (stress.rationale) intentRationale.push({ code: stress.code, text: stress.rationale });
+  }
+  // The weekly heavy lower anchor guard is a reason of its own: the eve spoke, and these
+  // groups kept every set because today is the week's last heavy lower exposure.
+  const stressGuardGroups =
+    stress.code && stress.guard && Array.isArray(stress.guard_groups) && stress.guard_groups.length
+      ? dedupe(stress.guard_groups.map((g) => String(g).toLowerCase()))
+      : [];
+  if (stressGuardGroups.length && (stressReduced.length || stressExcluded.length)) {
+    fire(precedence, "weekly_heavy_anchor_kept");
+    soft.push({
+      code: "weekly_heavy_anchor_kept",
+      detail: `The week's last heavy lower exposure keeps every set (${stressGuardGroups.join(", ")}) on the eve of the key run`,
+    });
   }
 
   if (enduranceReduced.length) {
@@ -3152,12 +3201,13 @@ export function buildDailySessionDecision(
       const shallowHold = !!group && saturated.includes(group) && !reduced.includes(group) && !earned;
       // The key-run eve's anchor stays as written: its group reads reduced for the other
       // items in it, never for the anchor itself, unless another rule reduced it too.
+      // The standing eve passes over every item it did not name (a compound beside the
+      // trimmed accessory) the same way, while the group is one only the eve reduced.
+      const stressSoleGroup = !!group && stressReduced.includes(group) && !baseReduced.includes(group);
       const stressHeldAnchor =
-        stressHold != null &&
-        !!group &&
-        it.exercise.toLowerCase() === stressHold.exercise.toLowerCase() &&
-        stressReduced.includes(group) &&
-        !baseReduced.includes(group);
+        stressSoleGroup &&
+        ((stressHold != null && it.exercise.toLowerCase() === stressHold.exercise.toLowerCase()) ||
+          (stressTrimNames != null && !stressTrimNames.has(it.exercise.toLowerCase())));
       if (
         group &&
         ((reduced.includes(group) && !stressHeldAnchor) || shallowHold) &&
@@ -3351,7 +3401,15 @@ export function buildDailySessionDecision(
       ? {
           code: stress.code,
           groups: dedupe([...stressReduced, ...stressExcluded]),
-          ...stressSoleReduced(reduced, stressReduced, baseReduced, stress.load_held === true, stressHold),
+          ...stressSoleReduced(
+            reduced,
+            stressReduced,
+            baseReduced,
+            stress.load_held === true,
+            stressHold,
+            stressStandingTrim
+          ),
+          ...(stressGuardGroups.length ? { guard: WEEKLY_HEAVY_ANCHOR_KEPT, guard_groups: stressGuardGroups } : {}),
         }
       : null;
 

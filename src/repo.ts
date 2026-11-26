@@ -119,6 +119,7 @@ export * from "./repo/hybrid-run-lookahead.js"; // hybrid planned_run_next overr
 export * from "./repo/dexa-targeting.js"; // DEXA regional read → training + nutrition targets
 export * from "./repo/muscle-trajectory.js"; // per-muscle-group advance/stall + strength test-week cadence
 export * from "./repo/strength-capability.js"; // progress per movement unit and muscle, the lift as evidence
+export { capabilityWithLadder } from "./repo/capability-ladder.js"; // the capability read + each in-plan unit's next plateau lever (surfaces only)
 export * from "./repo/coaching-focus.js"; // THE CONDUCTOR — one sequenced whole-athlete focus across all domains
 export * from "./repo/signal-state.js"; // unified daily evidence dimensions + one deterministic planning posture
 export * from "./repo/attention.js"; // adaptive attention cadence kernel

@@ -60,6 +60,7 @@ import { collapseByDateLatestNonNull } from "./checkin-days.js";
 import { getActiveNutritionTarget, getLatestNutritionTarget } from "./nutrition.js";
 import { computeGoalCheck } from "./profile.js";
 import { getProgramState } from "./program-state.js";
+import { capabilityUsable, liftStallUnitRead, type ProgramCapability } from "./capability-consumers.js";
 import { recoveryTrendBars } from "./recovery-trend.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { isoDay } from "../lib/dates.js";
@@ -499,22 +500,61 @@ function illnessArm(asOf: string): EnergyDeficiencyArm {
 }
 
 /**
- * Are lifts stalling or slipping on evidence that can actually vouch for them?
+ * Is strength stalling or slipping across the movements he is doing, on evidence that can
+ * vouch?
  *
- * The vouched-compliance law is inherited rather than re-implemented: a lift's
- * `status` is graded only on sessions the comparability filter admits, and a lift
- * without enough of them grades as `new` — which this arm reads as ABSENT. A stale
- * prescription is silence, never a stall.
+ * Counted over movement units, never single lifts (capability-consumers.ts
+ * `liftStallUnitRead`): a witness is a graded unit, holding or slipping on comparable
+ * sessions, with a lift trained inside the current window. Variants of one movement are one
+ * unit, so a swap is never a stall; a resting lift never counts, in the numerator or the
+ * denominator. Nothing explains a unit away here, the cut least of all: this arm exists to
+ * ask what a deficit is costing. Met at LIFT_STALL_MIN_UNITS witnesses, so it fires
+ * wherever the lift rule it replaced fired once the same lifts are grouped into movements.
+ * The vouched-compliance law is inherited: the capability read admits only comparable
+ * sessions, and a unit without enough of them reads `not_enough`, which this arm leaves
+ * out (no graded unit is ABSENT).
+ *
+ * A capability read that is not in hand (it threw, or the state was read without one)
+ * never switches the arm off: the lift-level rule answers instead (`liftStallByLifts`).
  */
 function liftStallArm(asOf: string): EnergyDeficiencyArm {
-  let lifts: any[] = [];
+  let state: any = null;
   try {
-    lifts = (getProgramState(asOf) as any)?.lifts ?? [];
+    state = getProgramState(asOf) as any;
   } catch {
-    lifts = [];
+    state = null;
   }
-  // A resting lift (off the plan, not trained lately) is in neither the numerator nor the
-  // denominator: a lift he is not doing is no evidence about how he is coping now.
+  const capability: ProgramCapability | null = state?.capability ?? null;
+  if (!capabilityUsable(capability)) return liftStallByLifts(asOf, Array.isArray(state?.lifts) ? state.lifts : []);
+  const read = liftStallUnitRead(capability);
+  if (read.verdict === "absent") {
+    return {
+      key: "lift_stall",
+      verdict: "absent",
+      summary: "No movement trained lately has enough comparable history to read, so this arm says nothing.",
+      evidence_keys: [],
+    };
+  }
+  return {
+    key: "lift_stall",
+    verdict: read.verdict,
+    summary:
+      read.verdict === "met"
+        ? `${read.stalled} of ${read.graded} movements trained lately are holding or slipping on comparable sessions, ${read.slipping} of them slipping.`
+        : `Comparable sessions have ${read.graded - read.stalled} of ${read.graded} movements trained lately still moving.`,
+    evidence_keys: [`capability.units:${asOf}:stalled=${read.stalled}/${read.graded}:slipping=${read.slipping}`],
+  };
+}
+
+/**
+ * The stall arm by lifts: the rule the unit read replaced, kept verbatim for the morning
+ * the capability read cannot be had. A lift graded on comparable sessions (status not
+ * `new`) and not resting is graded; two of them plateaued or regressing is met. A
+ * resting lift is in neither count.
+ */
+export const LIFT_STALL_MIN_LIFTS = 2;
+
+export function liftStallByLifts(asOf: string, lifts: readonly any[]): EnergyDeficiencyArm {
   const graded = (Array.isArray(lifts) ? lifts : []).filter(
     (lift) => lift?.status && lift.status !== "new" && lift.resting !== true
   );
@@ -527,13 +567,13 @@ function liftStallArm(asOf: string): EnergyDeficiencyArm {
     };
   }
   const stalled = graded.filter((lift) => ["regressing", "plateaued"].includes(String(lift.status)));
+  const met = stalled.length >= LIFT_STALL_MIN_LIFTS;
   return {
     key: "lift_stall",
-    verdict: stalled.length >= 2 ? "met" : "not_met",
-    summary:
-      stalled.length >= 2
-        ? `${stalled.length} of ${graded.length} graded lifts are stalled or slipping on comparable sessions.`
-        : `Comparable sessions have ${graded.length - stalled.length} of ${graded.length} graded lifts still moving.`,
+    verdict: met ? "met" : "not_met",
+    summary: met
+      ? `${stalled.length} of ${graded.length} graded lifts are stalled or slipping on comparable sessions.`
+      : `Comparable sessions have ${graded.length - stalled.length} of ${graded.length} graded lifts still moving.`,
     evidence_keys: [`program_state.lifts:${asOf}:stalled=${stalled.length}/${graded.length}`],
   };
 }

@@ -87,7 +87,9 @@ test("C4: buildProgressionProposal turns a stalled 'vary' into a swap change, no
   // Flat for many weeks at RIR 2 (not grinding) → the engine reads 'vary'.
   for (const d of [35, 28, 21, 14, 7, 2]) logSet("Leg Press", isoDaysAgo(d), { weight: 400, reps: 10, rir: 2 });
 
-  const prop = buildProgressionProposal(1);
+  // The engine's own rotation, read without the plateau ladder: with it, a rotation on a
+  // movement the ladder covers waits for the ladder's lever (ladderWiring.test.js).
+  const prop = buildProgressionProposal(1, { ladder: null });
   assert.equal(prop.ok, true, "there's something to propose");
   const swap = prop.proposal.parsed.changes.find((c) => c.swap);
   assert.ok(swap, "the vary became a swap change");

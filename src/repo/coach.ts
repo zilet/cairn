@@ -20,7 +20,9 @@ import {
 import { getActiveBlock } from "./program-blocks.js";
 import { coachBlockSummary, nextWeekScheduledDeloadRuns } from "./block-phase.js";
 import { goalPace } from "./goal-pace.js";
-import { getProgramState, type ProgramState } from "./program-state.js";
+import { getProgramState, programStateSignalKey, type ProgramState } from "./program-state.js";
+import { capabilityPromptView } from "./capability-consumers.js";
+import { unitPlateauForCoach } from "./unit-plateau.js";
 import { getStrengthJourney } from "./strength-objectives.js";
 import { performanceStanding } from "./performance.js";
 import { thisWeekPlanDayMap } from "./plan-selection.js";
@@ -893,6 +895,8 @@ function buildTrainingSlice(
   | "garmin"
   | "program_block"
   | "program_state"
+  | "capability"
+  | "unit_plateau"
   | "performance"
   | "program_balance"
   | "weekly_set_targets"
@@ -961,6 +965,22 @@ function buildTrainingSlice(
     // the "what to evolve next" list — so EVERY plan-shaping prompt sees the
     // program's actual trajectory, not just raw sessions. Bounded; no scores.
     program_state: programStateForCoach(fullProgramState),
+    // Progress judged per MOVEMENT UNIT and muscle (the capability read program state
+    // carries), compact: the overall line, the in-plan units with their verdict, what
+    // explains a flat one, the lifts feeding each, and the muscles. A swap inside a unit is
+    // never a reset; a lift he is not doing is in no unit on the plan.
+    capability: capabilityPromptView(fullProgramState?.capability ?? null),
+    // The plateau ladder's next lever per stalled movement on the plan (unit-plateau.ts):
+    // only the movements with a lever to pull, never the climbing or the merely waiting.
+    // The plan prompts and chat follow it rather than invent a lever of their own. An
+    // empty list (nothing stalled, or a ladder that could not be read) says nothing.
+    unit_plateau: (() => {
+      try {
+        return unitPlateauForCoach(today);
+      } catch {
+        return [];
+      }
+    })(),
     // The TRAINING-INTELLIGENCE read (capacity, not just trajectory): where each
     // benchmark lift sits as a sex/age percentile against proven strength standards,
     // VO2max-for-age, the strength IMBALANCES, the single biggest lever, lifts worth
@@ -1434,7 +1454,9 @@ function getCoachContextFromSnapshot(): CoachContext {
   // Compute the deterministic program-state ONCE and share it: the bounded coach
   // view AND the performance/capacity read both read from the same snapshot (and
   // the same recovery), so a single context build never computes program-state twice.
-  const fullProgramState = brainSignal("program_state", () => getProgramState(undefined, recovery));
+  // Keyed through programStateSignalKey, so a partial state (one read while a capability
+  // pass is in flight) can never be shared under the finished state's key.
+  const fullProgramState = brainSignal(programStateSignalKey(), () => getProgramState(undefined, recovery));
   const strengthJourneyView = brainSignal("strength_journey", () => {
     try {
       return getStrengthJourney({ programState: fullProgramState });

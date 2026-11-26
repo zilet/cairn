@@ -7,6 +7,8 @@ import type { EffectiveLocationContext } from "../repo/location-context.js";
 import type { FuelDemandWeek } from "../repo/fuel-demand.js";
 import type { ClientIntakeBand } from "../contracts/fuel.js";
 import type { RecentCardioRead } from "../repo/recent-cardio.js";
+import type { CapabilityPromptView } from "../repo/capability-consumers.js";
+import type { UnitPlateauCoachEntry } from "../repo/unit-plateau.js";
 
 export type CoachRecord = Record<string, any>;
 export type CoachGoalMode = "lose" | "maintain" | "gain";
@@ -399,6 +401,20 @@ export interface CoachContextEnvelope {
   run_compliance: CoachRecord | null;
   program_block: CoachRecord | null;
   program_state: CoachProgramState;
+  // Progress per movement unit and muscle (src/repo/capability-consumers.ts
+  // capabilityPromptView): the overall line, the in-plan units with their verdict, the
+  // qualifier that explains a flat one and the lifts feeding each, and the muscles. Names
+  // and words only; null when program state carried no available read. Optional so
+  // partial context builders never synthesize it. A sibling of program_state rather than
+  // a field inside it: the prompts project it per site, and programStateForCoach stays the
+  // per-lift read.
+  capability?: CapabilityPromptView | null;
+  // The plateau ladder's next lever for each STALLED movement on the plan
+  // (src/repo/unit-plateau.ts unitPlateauForCoach): the movement, whether it is a compound
+  // anchor, the lever (rep_scheme / set_quality / volume / variation), the plan lift it was
+  // judged on, and a variation's candidate. Only movements with a lever to pull; an empty
+  // list says nothing needs changing. Optional for the same reason as `capability`.
+  unit_plateau?: UnitPlateauCoachEntry[] | null;
   performance: CoachRecord | null;
   program_balance: CoachRecord | null;
   // The weekly per-group set floor (landmark low..high) the plan is held to, with what

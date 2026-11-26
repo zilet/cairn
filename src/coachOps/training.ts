@@ -9,6 +9,7 @@ import type { AiCacheHit } from "../repo/chat.js";
 import { listCheckins } from "../repo/coach.js";
 import { deterministicComposedSession, normalizeComposedSession } from "../repo/daily-composition.js";
 import { decideDailySession } from "../repo/daily-decision.js";
+import { todaySetQualityLifts } from "../repo/today-set-quality.js";
 import { getDailySessionOutcome } from "../repo/daily-reconciliation.js";
 import { dayRead, weekAheadPlan } from "../repo/day-read.js";
 import { weekAheadRaceLine } from "../repo/day-read-prose.js";
@@ -238,8 +239,11 @@ export async function composeDailySession(
   let chosen: string | null = run?.agent ?? null;
   const tried = run?.tried ?? triedFromFailure;
 
+  // The plateau ladder's effort lever for today's card (train reads only; null on any
+  // failure, and the card is then composed exactly as without it).
+  const setQuality = todaySetQualityLifts(envelope.date, envelope);
   if (run?.result?.parsed) {
-    const normalized = normalizeComposedSession(run.result.parsed, envelope);
+    const normalized = normalizeComposedSession(run.result.parsed, envelope, setQuality ? { setQuality } : {});
     validation = normalized.validation;
     if (normalized.session) {
       session = normalized.session;
@@ -251,7 +255,7 @@ export async function composeDailySession(
   }
 
   if (!session) {
-    session = deterministicComposedSession(envelope);
+    session = deterministicComposedSession(envelope, setQuality ? { setQuality } : {});
     chosen = chosen ?? "deterministic";
   }
 

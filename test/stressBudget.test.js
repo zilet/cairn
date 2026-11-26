@@ -835,9 +835,10 @@ test("gather: the race read is memoized, and a change to the stored race is read
   });
   const moved = stressBudgetSnapshot("2026-09-30", ctx);
   assert.notDeepEqual(moved, first, JSON.stringify(moved));
-  // And no race at all is nothing to say.
+  // And no race at all leaves only the standing eve: tomorrow's placed quality run, no
+  // race fields on the slice (the decide half then trims accessories only).
   repo.setProfile({ endurance_goal: null });
-  assert.equal(stressBudgetSnapshot("2026-09-30", ctx), undefined);
+  assert.deepEqual(stressBudgetSnapshot("2026-09-30", ctx), { key_run: { kind: "quality", in_days: 1 } });
 });
 
 test("gather end to end: Wednesday owes the week's legs, so Thursday's quality run trims nothing", () => {

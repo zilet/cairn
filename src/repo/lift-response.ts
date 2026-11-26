@@ -95,6 +95,54 @@ export function movedRepRange(repLow: number, repHigh: number): { rep_low: numbe
   return next.rep_high <= REP_RANGE_CEILING ? next : null;
 }
 
+// THE GENERALIZED REP-RANGE MOVE (the plateau ladder, unit-plateau.ts). The isolation
+// grind above is one door; a whole movement unit that has held one load and one rep count
+// for weeks is the other. A compound keeps its move inside a strength-and-size range: past
+// COMPOUND_REP_RANGE_CEILING reps a bar lift stops training the quality the plan wrote it
+// for, so its ladder moves to the next lever instead. Evidence: double progression and a
+// change of rep range at a held load come before a change of exercise; very high-rep
+// compound work is mostly local endurance (the ceiling itself is a coaching convention,
+// not a measured threshold).
+/** The highest rep_high a COMPOUND lift's rep-range move may write. */
+export const COMPOUND_REP_RANGE_CEILING = 15;
+
+/** The range one rep-range move writes for this lift, or null past its ceiling. */
+export function movedRepRangeFor(
+  repLow: number,
+  repHigh: number,
+  opts: { compound: boolean }
+): { rep_low: number; rep_high: number } | null {
+  const next = movedRepRange(repLow, repHigh);
+  if (!next) return null;
+  return opts.compound && next.rep_high > COMPOUND_REP_RANGE_CEILING ? null : next;
+}
+
+/**
+ * Is the rep-range move SPENT for this lift in the plateau that began on `plateauSince`?
+ * The ledger's rule (the progression engine reads it the same way): a move whose range
+ * still stands spends it — the lift is answered by the other levers from then on, so a
+ * range never creeps up plateau after plateau — and a move the athlete undid or refused
+ * inside this plateau spends it for this plateau. A no from an earlier plateau does not.
+ * A ledger that cannot be read reads spent (fail closed).
+ */
+export function repRangeMoveSpent(
+  exerciseName: string,
+  currentRepLow: number | null,
+  plateauSince: string | null,
+  asOf: string = localDateISO()
+): boolean {
+  let prior: ReturnType<typeof lastAppliedRepRangeMove>;
+  try {
+    prior = lastAppliedRepRangeMove(exerciseName, asOf);
+  } catch {
+    return true;
+  }
+  if (!prior) return false;
+  if (prior.vetoed) return plateauSince == null || prior.day >= plateauSince;
+  if (prior.rep_low == null || currentRepLow == null) return true;
+  return Number(currentRepLow) >= prior.rep_low;
+}
+
 // A UTC `created_at` stamp → its local day (fail-soft).
 function localDayOf(stamp: unknown): string | null {
   const text = String(stamp ?? "").trim();

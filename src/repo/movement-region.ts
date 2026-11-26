@@ -45,17 +45,30 @@ const CURL = /\bcurls?\b|\bpreacher\b/;
 const NOT_ARM_CURL = /\b(?:leg|hamstring|nordic|wrist|lying leg|seated leg|standing leg|prone leg)\b/;
 const CURL_NEUTRAL = /\b(?:hammer|neutral|rope curl|cross body|crossbody)\b/;
 const CURL_PRONATED = /\breverse (?:grip )?curls?\b|\bpronated\b/;
+// Elbow extension by name. "Press down" spelled apart is a pressdown, and an overhead
+// extension that never says "triceps" is still one (the swap-family table would read it
+// as an overhead press).
 const TRICEPS =
-  /\btri(?:cep|ceps)?\b|\bpushdowns?\b|\bpush downs?\b|\bpressdowns?\b|\bskull ?crushers?\b|\bfrench press\b/;
-const TRICEPS_PUSHDOWN = /\bpushdowns?\b|\bpush downs?\b|\bpressdowns?\b/;
+  /\btri(?:cep|ceps)?\b|\bpushdowns?\b|\bpush downs?\b|\bpress ?downs?\b|\bskull ?crushers?\b|\bfrench press\b|\boverhead (?:[a-z]+ ){0,2}ext(?:ension)?s?\b/;
+// A straight-arm pushdown is the lats' shoulder extension, never a triceps pushdown.
+const NOT_TRICEPS = /\bstraight arm\b|\bclose grip\b/;
+// Every cable pushdown is one region whatever the attachment (rope, straight bar, V-bar,
+// single arm, reverse grip); a "triceps pulldown" is the same movement misnamed.
+const TRICEPS_PUSHDOWN = /\bpushdowns?\b|\bpush downs?\b|\bpress ?downs?\b|\bpull ?downs?\b/;
 const TRICEPS_OVERHEAD = /\b(?:overhead|oh)\b|\bfrench press\b/;
 const TRICEPS_LYING = /\bskull ?crushers?\b|\blying\b/;
 const TRICEPS_EXTENSION = /\bext(?:ension)?s?\b|\bfrench press\b|\bskull ?crushers?\b/;
 const TRICEPS_KICKBACK = /\bkickbacks?\b/;
+// A dumbbell kickback is the triceps' (the swap-family table reads it the same way); a
+// glute kickback never is.
+const TRICEPS_KICKBACK_IMPLEMENT = /\btri(?:cep|ceps)?\b|\b(?:db|dumbbells?)\b/;
+const GLUTE = /\bglutes?\b/;
+// Every lateral raise is one region whatever the implement or lean (cable, machine,
+// dumbbell, lean-away, single arm). A front raise and an upright row are not lateral raises.
 const LATERAL_RAISE =
-  /\blateral (?:delt )?raises?\b|\bside (?:lateral )?raises?\b|\blat raises?\b|\bcable laterals?\b|\bdumbbell laterals?\b|\bdb laterals?\b/;
+  /\blateral (?:delt |deltoid |shoulder )?raises?\b|\bside (?:lateral |delt |deltoid )?raises?\b|\b(?:medial|side) delt(?:oid)? raises?\b|\blat raises?\b|\b(?:cable|dumbbell|db|machine|lean away|leaning|single arm|one arm) laterals?\b/;
 const REAR_DELT =
-  /\brear delt\b|\breverse (?:pec deck|pec|fly|flye|flyes|flies|delt)\b|\brear (?:fly|flye|flyes|flies)\b|\bface pulls?\b/;
+  /\brear delt\b|\breverse (?:pec deck|pec|fly|flye|flyes|flies|delt)\b|\brear (?:fly|flye|flyes|flies)\b|\bface pulls?\b|\breverse (?:cable )?crossovers?\b/;
 const NOT_REAR_DELT = /\bpull aparts?\b/;
 
 // Every key movementRegionKey can answer, as a value list: the vocabulary an agent's exercise
@@ -117,8 +130,8 @@ export function movementRegionKeyCurated(name: string, _group?: string | null): 
   if (DIP.test(n)) return "dip";
   const press = pressSlotKey(name);
   if (press) return press;
-  if (TRICEPS_KICKBACK.test(n) && /\btri(?:cep|ceps)?\b/.test(n)) return "triceps:kickback";
-  if (TRICEPS.test(n) && !/\bclose grip\b/.test(n)) {
+  if (TRICEPS_KICKBACK.test(n) && TRICEPS_KICKBACK_IMPLEMENT.test(n) && !GLUTE.test(n)) return "triceps:kickback";
+  if (TRICEPS.test(n) && !NOT_TRICEPS.test(n)) {
     if (TRICEPS_PUSHDOWN.test(n)) return "triceps:pushdown";
     if (TRICEPS_LYING.test(n)) return "triceps:lying";
     if (TRICEPS_OVERHEAD.test(n)) return "triceps:overhead";

@@ -36,6 +36,14 @@ export type ProfileConfidence = (typeof PROFILE_CONFIDENCE)[number];
 export type ProfileSource = "agent" | "user";
 
 /**
+ * The confidence at which an agent profile may correct a `legacy` muscle group (set before
+ * sources were tracked, so possibly a person's choice). Only the top band: a medium or low
+ * profile is stored, never applied. See recheckExerciseGroups (repo/exercises.ts) for the rest
+ * of the rule (curated tables must agree or be silent; never a person's or a hand-set profile).
+ */
+export const PROFILE_GROUP_CORRECTION_CONFIDENCE: ProfileConfidence = "high";
+
+/**
  * The synergist shares the credit model has: 0.5 is COUNTED toward volume, 0.25 only TOUCHED
  * (muscle-credit.ts HALF_SHARE / TOUCHED_SHARE; a test pins the two together). Literals here,
  * not the imports: this module sits in an import cycle with the classifiers, so nothing may

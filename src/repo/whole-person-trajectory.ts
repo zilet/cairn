@@ -623,8 +623,17 @@ function storedDosesForSessionRead(sessionId: number): StoredDose[] {
     const row = db
       .prepare(`SELECT facts_json FROM daily_session_outcomes WHERE session_id = ? ORDER BY id DESC LIMIT 1`)
       .get(sessionId) as { facts_json?: string } | undefined;
-    if (!row?.facts_json) return [];
-    const facts = JSON.parse(String(row.facts_json));
+    return storedDosesFromFacts(row?.facts_json);
+  } catch {
+    return []; // an unreadable outcome is no prescription evidence
+  }
+}
+
+// One outcome row's dose evidence, the card's own asks only.
+function storedDosesFromFacts(factsJson: unknown): StoredDose[] {
+  if (!factsJson) return [];
+  try {
+    const facts = JSON.parse(String(factsJson));
     // Work logged before its card existed had no prescription: the card never asked it for anything.
     return Array.isArray(facts?.dose_evidence)
       ? (facts.dose_evidence as StoredDose[]).filter((dose) => !doseAdoptedAfterLog(dose))
@@ -632,6 +641,96 @@ function storedDosesForSessionRead(sessionId: number): StoredDose[] {
   } catch {
     return []; // an unreadable outcome is no prescription evidence
   }
+}
+
+function safeIdentity(name: string): string {
+  try {
+    return exerciseIdentityKey(name);
+  } catch {
+    return name.trim().toLowerCase();
+  }
+}
+
+// The one dose a (session's doses, lift) pair is judged on, then the card's ask.
+function lighterByCard(doses: readonly StoredDose[], exercise: string, identity: (name: string) => string): boolean {
+  if (!doses.length) return false;
+  const key = identity(String(exercise));
+  const dose = doses.find(
+    (candidate) =>
+      String(candidate.movement_key ?? "") === key ||
+      (candidate.exercise != null && identity(String(candidate.exercise)) === key)
+  );
+  return dose ? cardAskedForLess(dose) : false;
+}
+
+/** How many session ids one batched outcome query binds (well under SQLite's parameter limit). */
+const LIGHTER_BATCH_CHUNK = 400;
+
+/**
+ * `exposureLighterOnPurpose` for MANY (session, lift) pairs, read in one pass: the outcome
+ * rows of every session in `sessionIds` are fetched in one query (the latest row per
+ * session, as the single read takes it), each lift name's identity key is resolved once,
+ * and — when the caller already knows these sessions are not compliant recovery-dose
+ * sessions (`recoveryChecked: true`, e.g. it filtered them through
+ * `sessionCountsTowardLiftTrajectory`) — the recovery-dose read is skipped. Same answer as
+ * `exposureLighterOnPurpose(sessionId, exercise)` for every pair (a session outside
+ * `sessionIds` falls back to that single read). Read-only.
+ */
+export function lighterOnPurposeReader(
+  sessionIds: Iterable<number>,
+  opts: { recoveryChecked?: boolean } = {}
+): (sessionId: number, exercise: string) => boolean {
+  const ids = [...new Set([...sessionIds].map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  const doses = new Map<number, StoredDose[]>();
+  for (let i = 0; i < ids.length; i += LIGHTER_BATCH_CHUNK) {
+    const chunk = ids.slice(i, i + LIGHTER_BATCH_CHUNK);
+    let rows: Array<{ session_id: number; facts_json?: string }> = [];
+    try {
+      rows = db
+        .prepare(
+          `SELECT session_id, facts_json FROM daily_session_outcomes
+            WHERE session_id IN (${chunk.map(() => "?").join(",")}) ORDER BY id DESC`
+        )
+        .all(...chunk) as any[];
+    } catch {
+      rows = []; // an unreadable outcome is no prescription evidence
+    }
+    for (const id of chunk) doses.set(id, []);
+    const seen = new Set<number>();
+    for (const row of rows) {
+      const id = Number(row.session_id);
+      if (seen.has(id)) continue; // the latest row only (ORDER BY id DESC)
+      seen.add(id);
+      doses.set(id, storedDosesFromFacts(row.facts_json));
+    }
+  }
+  const identities = new Map<string, string>();
+  const identity = (name: string): string => {
+    let key = identities.get(name);
+    if (key == null) {
+      key = safeIdentity(name);
+      identities.set(name, key);
+    }
+    return key;
+  };
+  const compliant = new Map<number, boolean>();
+  return (sessionId: number, exercise: string): boolean => {
+    const id = Number(sessionId);
+    if (!doses.has(id)) return exposureLighterOnPurpose(id, exercise, opts);
+    if (!opts.recoveryChecked) {
+      let recovery = compliant.get(id);
+      if (recovery == null) {
+        try {
+          recovery = recoverySessionDose(id).classification === "compliant";
+        } catch {
+          recovery = false; // an unreadable session dose is no evidence of a lighter prescription
+        }
+        compliant.set(id, recovery);
+      }
+      if (recovery) return true;
+    }
+    return lighterByCard(doses.get(id) ?? [], exercise, identity);
+  };
 }
 
 function cardAskedForLess(dose: StoredDose): boolean {
@@ -654,29 +753,23 @@ function cardAskedForLess(dose: StoredDose): boolean {
  * lift's own prior load, met by the athlete, is the prescription's dip, not the body's
  * (cardAskedForLess). Absence of evidence is never a set-aside. Read-only; exported so
  * the per-movement read (movement-standing.ts) holds a lift to the same law.
+ * `recoveryChecked: true` skips the recovery-dose read when the caller already knows the
+ * session is not a compliant recovery-dose session (it counts toward the lift trajectory).
+ * Many pairs at once: `lighterOnPurposeReader`.
  */
-export function exposureLighterOnPurpose(sessionId: number, exercise: string): boolean {
-  try {
-    if (recoverySessionDose(sessionId).classification === "compliant") return true;
-  } catch {
-    // an unreadable session dose is no evidence of a lighter prescription
-  }
-  const doses = storedDosesForSession(sessionId);
-  if (!doses.length) return false;
-  const identity = (name: string): string => {
+export function exposureLighterOnPurpose(
+  sessionId: number,
+  exercise: string,
+  opts: { recoveryChecked?: boolean } = {}
+): boolean {
+  if (!opts.recoveryChecked) {
     try {
-      return exerciseIdentityKey(name);
+      if (recoverySessionDose(sessionId).classification === "compliant") return true;
     } catch {
-      return name.trim().toLowerCase();
+      // an unreadable session dose is no evidence of a lighter prescription
     }
-  };
-  const key = identity(String(exercise));
-  const dose = doses.find(
-    (candidate) =>
-      String(candidate.movement_key ?? "") === key ||
-      (candidate.exercise != null && identity(String(candidate.exercise)) === key)
-  );
-  return dose ? cardAskedForLess(dose) : false;
+  }
+  return lighterByCard(storedDosesForSession(sessionId), exercise, safeIdentity);
 }
 
 function strengthRead(start: string, end: string, parked: boolean): WholePersonDomainRead {
