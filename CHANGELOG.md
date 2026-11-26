@@ -5,6 +5,17 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.5.1] — 2026-11-26
+
+The bars along the bottom of the screen stay on the bottom edge after you come back to the app.
+
+### Fixed
+
+- **Bottom bars after a return to the app.** On an installed iPhone app the tab bar could sit in
+  the middle of the screen after you came back to it, and the rest timer could drift up and
+  scroll with the page during a session. The tab bar, rest timer, save bar and toast now hold the
+  bottom edge.
+
 ## [2.5.0] — 2026-11-25
 
 Cairn used to grade your lifts one by one and ask you what to do about each. It now coaches the
