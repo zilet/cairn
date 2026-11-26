@@ -244,12 +244,18 @@
     // floating/split keyboard) still registers as "open" instead of reading closed
     // mid-type — a false "closed" used to trigger a stale-focus blur.
     const keyboardThreshold = () => Math.max(100, window.innerHeight * 0.15);
+    const keyboardIntentOpen = () => Date.now() < keyboardIntentUntil;
+    // A keyboard needs something to type into. iOS (above all the installed PWA) can
+    // come back from the background still reporting the visual viewport it had with
+    // the keyboard up, and never corrects it: no resize follows, on any screen. With no
+    // field focused and none just tapped, a keyboard-sized gap is that stale reading,
+    // not a keyboard, and nothing may be laid out by it (the tab bar sat mid-screen).
+    const keyboardPlausible = () => !!focusedTextInput() || keyboardIntentOpen();
     const keyboardGeometryOpen = () => {
       const layoutShrink = Math.max(0, window.innerHeight - vv.height);
       const visualShrink = Math.max(0, vvMax - vv.height);
-      return Math.max(layoutShrink, visualShrink) > keyboardThreshold();
+      return Math.max(layoutShrink, visualShrink) > keyboardThreshold() && keyboardPlausible();
     };
-    const keyboardIntentOpen = () => Date.now() < keyboardIntentUntil;
     const isChatTextInput = (el: EventTarget | Element | null | undefined): el is HTMLElement =>
       textInputEl(el) && Boolean(el.closest?.(".chatview"));
     // NOTE: there is deliberately no blur-by-heuristic here anymore. iOS can dismiss
@@ -279,8 +285,11 @@
       // toolbar -> positive. NOT forced to 0 while the keyboard is up — the tab bar is
       // slid off-screen by CSS then, and the toast/rest-bar should float ABOVE the
       // keyboard rather than snap down behind it.
+      // A browser toolbar is small; a keyboard-sized gap with no keyboard plausible is
+      // a stale viewport (see keyboardPlausible) and lifts nothing.
       const rawVvb = window.innerHeight - (vv.offsetTop + vv.height);
-      root.style.setProperty("--vvb", `${Math.round(Math.max(0, rawVvb))}px`);
+      const stale = rawVvb > keyboardThreshold() && !keyboardPlausible();
+      root.style.setProperty("--vvb", `${stale ? 0 : Math.round(Math.max(0, rawVvb))}px`);
       // Its top twin: how far iOS has scrolled the visual viewport down (it does as the
       // keyboard rises). A full-screen fixed layer pinned between --vvt and --vvb is
       // exactly the visible area, so its bottom-docked composer rides the keyboard top.

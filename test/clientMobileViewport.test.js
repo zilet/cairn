@@ -172,6 +172,8 @@ test("mobile viewport guard derives keyboard state from visual viewport geometry
   assert.equal(env.body.classList.contains("kb-open"), false);
   assert.equal(env.getStyle("--vvb"), "0px");
 
+  const typing = new FakeElement("TEXTAREA");
+  env.document.activeElement = typing;
   env.visualViewport.height = 540;
   env.fireViewport("resize");
   assert.equal(env.body.classList.contains("kb-open"), true);
@@ -223,10 +225,38 @@ test("mobile viewport suppresses post-picker chat intent until geometry opens", 
   assert.equal(env.body.classList.contains("kb-open"), false);
   assert.equal(env.body.classList.contains("kb-geometry-open"), false);
 
+  env.document.activeElement = input;
   env.visualViewport.height = 540;
   env.fireViewport("resize");
   assert.equal(env.body.classList.contains("kb-open"), true);
   assert.equal(env.body.classList.contains("kb-geometry-open"), true);
+});
+
+test("a stale keyboard-sized viewport on resume never lifts the bottom bars", () => {
+  // The live report: an installed iPhone PWA back from the background, nothing focused,
+  // innerHeight 793 but the visual viewport still 491 tall. The tab bar sat 301px up.
+  const env = loadMobileViewport({ innerHeight: 793, viewportHeight: 793 });
+  env.context.window.installMobileViewportGuards();
+  const field = new FakeElement("TEXTAREA");
+  env.document.activeElement = field;
+  env.fireDocument("focusin", { target: field });
+  env.visualViewport.height = 491;
+  env.fireViewport("resize");
+  assert.equal(env.getStyle("--vvb"), "302px", "a real keyboard still lifts the toast and rest bar");
+
+  env.document.activeElement = env.body; // the field let go; iOS never reports the viewport back
+  env.fireDocument("focusout", {});
+  env.fireDocument("visibilitychange", {});
+  env.fireWindow("pageshow");
+  assert.equal(env.getStyle("--vvb"), "0px");
+  assert.equal(env.body.classList.contains("kb-geometry-open"), false);
+  assert.equal(env.body.classList.contains("kb-open"), false);
+  assert.equal(env.document.documentElement.classList.contains("kb-up"), false);
+
+  // A browser's bottom toolbar is a small gap and is still honoured with nothing focused.
+  env.visualViewport.height = 743;
+  env.fireViewport("resize");
+  assert.equal(env.getStyle("--vvb"), "50px");
 });
 
 test("one app-wide keyboard state: the tab bar steps away for any focused field, not only Chat", () => {
