@@ -8797,3 +8797,14 @@ key partial states through `programStateSignalKey`; a plan-day pass reads the la
 (`onceLadder`). The effort note is one plain-words line a session on the plan lift of a unit
 whose lever is `set_quality`, never a load or set change. The stress decision's new fields
 (`scope`, `trim_exercises`, `guard`) moved the daily decision to `daily_decision_v9`.
+
+**Three corrections after the first live read (2026-11-26).** A press slot belongs to a press:
+a curated `horizontal-press:*` region is taken only when the name carries a press word, so a
+knee raise on a flat bench reads as core work, and any "bench press" (a close-grip one filed
+under triceps or forearms included) is the flat/incline/decline press unit; cuff rotation is
+the progress family `rotator-cuff`, never an overhead press. For a strength-led athlete
+(`isStrengthLedIntent`) the `run_build` qualifier comes only from the hybrid read asking to
+shift the legs: rising weekly running or a distant race goal never explains a leg lift away.
+And `isoDateTime` (`src/brain/contract-utils.ts`) reads a zone-less stamp as UTC, as
+`parseDbTime` does: `new Date()` read it as local time and moved a decision stamped from a
+database row by the UTC offset.

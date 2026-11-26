@@ -21,6 +21,7 @@ import { normalizeExerciseName } from "./exercise-canon.js";
 
 export type ProgressRegion =
   | "tibialis"
+  | "rotator-cuff"
   | "hip-adduction"
   | "hip-abduction"
   | "front-raise"
@@ -44,6 +45,8 @@ const PROGRESS_REGION_RULES: ReadonlyArray<readonly [ProgressRegion, RegExp]> = 
   // Tibialis anterior: dorsiflexion against load. Not a calf (that is plantar flexion).
   // A bare "toe raise" is left alone: gyms use it for both directions.
   ["tibialis", /\btib(?:ialis)?\b|\btib raises?\b|\bdorsiflex(?:ion|ions)?\b/],
+  // Shoulder rotation against light load: cuff work, never an overhead press.
+  ["rotator-cuff", /\brotator cuff\b|\b(?:external|internal) rotations?\b/],
   ["hip-adduction", /\badduct(?:ion|ions|or|ors)?\b|\bcopenhagen\b/],
   [
     "hip-abduction",

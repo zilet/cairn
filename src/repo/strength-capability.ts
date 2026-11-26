@@ -109,6 +109,7 @@ import { activeRecoveryWeek } from "./recovery-week.js";
 import { activeRecoveryWeekLedger, completedRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
+import { getTrainingIntent, isStrengthLedIntent } from "./training-intent.js";
 import { capacityEnvelopeAsOf, type StrengthExposure } from "./strength-objectives.js";
 import { currentTrainingDataVersion } from "./training-cache.js";
 import { variantTransfer } from "./variant-transfer.js";
@@ -215,6 +216,7 @@ const UNIT_PHRASE: Readonly<Record<string, string>> = {
   "rear-delt": "rear-delt",
   // The progress-only regions (capability-region.ts).
   tibialis: "tibialis raise",
+  "rotator-cuff": "rotator cuff",
   "hip-adduction": "hip adduction",
   "hip-abduction": "hip abduction",
   "front-raise": "front raise",
@@ -290,6 +292,8 @@ const PRESS_SLOT = /^horizontal-press:(flat|incline|decline)$/;
 // A "raise" no name rule files is never a compound, whatever the group hint says: a
 // cable Y raise filed under shoulders is not an overhead press.
 const RAISE_WORD = /\braises?\b/i;
+const BENCH_PRESS = /\bbench press(?:es)?\b/i;
+const PRESS_WORD = /\bpress(?:es)?\b|\bpush[- ]?ups?\b|\bdips?\b/i;
 
 /** The unit a lift belongs to, or null when it has no pattern and no region. */
 export function capabilityUnitOf(name: string, group: string | null): UnitIdentity | null {
@@ -297,7 +301,14 @@ export function capabilityUnitOf(name: string, group: string | null): UnitIdenti
   // (capability-region.ts), then (for a compound) the pattern, and only where the tables
   // say nothing the agent-filled profile (exercise-profile.ts). Today's card never takes
   // the progress families or the profile fill.
-  const curated = movementRegionKey(name, group);
+  // A press slot belongs to a press: "Flat Bench Knee Raise" matches the bench words of the
+  // curated press rule but is a core lift, so without a press word of its own the slot is
+  // not taken and the progress families read the name instead.
+  const curatedRaw = movementRegionKey(name, group);
+  const curated =
+    curatedRaw && PRESS_SLOT.test(curatedRaw) && !PRESS_WORD.test(name) && classifyPattern(name) !== "horizontal-push"
+      ? null
+      : curatedRaw;
   if (!curated) {
     const family = progressRegionKey(name);
     if (family) return { key: family, kind: "region", compound: false };
@@ -305,6 +316,17 @@ export function capabilityUnitOf(name: string, group: string | null): UnitIdenti
   const region = curated ?? movementRegionKey(name, group, { profile: true });
   const pattern = classifyPattern(name, group ?? undefined, { profile: true });
   const raiseByGroupOnly = RAISE_WORD.test(name) && !classifyPattern(name);
+  // A press in a press slot is the press unit whatever its stored muscle group says (a
+  // close-grip bench filed under triceps or forearms is still a flat press).
+  if (region && PRESS_SLOT.test(region) && PRESS_WORD.test(name)) {
+    return { key: `horizontal-push:${PRESS_SLOT.exec(region)?.[1] ?? "flat"}`, kind: "pattern", compound: true };
+  }
+  // The same by name alone, where no table or profile gave a region: any "bench press"
+  // is a horizontal press, flat unless the name says otherwise.
+  if (BENCH_PRESS.test(name)) {
+    const slot = /\bincline\b/i.test(name) ? "incline" : /\bdecline\b/i.test(name) ? "decline" : "flat";
+    return { key: `horizontal-push:${slot}`, kind: "pattern", compound: true };
+  }
   if (!raiseByGroupOnly && isCompoundLift(name, group)) {
     if (pattern === "horizontal-push" || (region && PRESS_SLOT.test(region))) {
       const slot = region ? PRESS_SLOT.exec(region)?.[1] : null;
@@ -529,9 +551,13 @@ function raceBuildRamping(date: string): boolean {
 // Running load ramping, from the reads that already own it: the endurance acute:chronic
 // ratio, the hybrid read asking to shift the legs, or a race build in a build or peak week.
 function runBuildActive(date: string, programState: ProgramState | null): boolean {
+  if (programState?.hybrid?.status === "shift-legs") return true;
+  // Strength-led (lifting is the priority, running supports it): rising weekly running or a
+  // distant race goal never explains a leg lift away. Only the hybrid read actually asking
+  // to shift the legs does.
+  if (safe(() => isStrengthLedIntent(getTrainingIntent()), false)) return false;
   const acwr = finite(programState?.endurance?.acute_chronic_ratio);
   if (acwr != null && acwr >= RUN_RAMP_ACWR) return true;
-  if (programState?.hybrid?.status === "shift-legs") return true;
   return safe(() => raceBuildRamping(date), false);
 }
 

@@ -81,7 +81,14 @@ export function isoDate(value: unknown): string | null {
 
 export function isoDateTime(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const parsed = new Date(value);
+  // A stamp with no zone is a UTC instant: that is what SQLite's datetime('now') writes
+  // ("YYYY-MM-DD HH:MM:SS") and what every stored *_at column holds. `new Date()` would
+  // read it as LOCAL time and move the instant by the UTC offset, so a decision stamped
+  // from a database row landed hours late and, in the evening west of Greenwich, on the
+  // wrong calendar day. Same rule as parseDbTime (repo/shared.ts).
+  const text = value.trim();
+  const zoneless = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text);
+  const parsed = new Date(zoneless ? `${text.replace(" ", "T")}Z` : text);
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
 }
 

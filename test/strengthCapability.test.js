@@ -281,6 +281,27 @@ test("a flat squat while weekly km ramps carries run_build; an upper-body unit d
   assert.doesNotMatch(muscleOf("chest", r).line, /run build/i);
 });
 
+test("strength-led: rising weekly running never explains a leg lift away", () => {
+  // The same ramp as above, but the athlete has said lifting leads and running supports it.
+  repo.setProfile({
+    primary_discipline: "hybrid",
+    training_intent: { priorities: ["strength", "muscle", "endurance"], endurance_role: "supporting" },
+  });
+  let n = 0;
+  const run = (delta, km) =>
+    repo.addActivity({ date: day(delta), type: "run", distance_km: km, duration_min: km * 6, source: "garmin", external_id: `srun-${n++}` });
+  for (const w of [1, 2, 3, 4]) {
+    run(-(7 * w + 1), 10);
+    run(-(7 * w + 3), 10);
+  }
+  for (const delta of [-1, -2, -4, -5]) run(delta, 8);
+  logLift("Back Squat", "quads", flat([...THEN, ...NOW], 275));
+  const squat = unitOf("squat", read());
+  assert.equal(squat.verdict, "holding");
+  assert.ok(!squat.qualifiers.includes("run_build"), `squat qualifiers ${squat.qualifiers}`);
+  assert.doesNotMatch(squat.line, /run build/i);
+});
+
 test("the table ratio carries a swap downward only, and never manufactures a climb", () => {
   // Back squat a month ago; front squat now (three exposures, no bridge). The table reads
   // the front squat at three quarters of the back squat: at 0.85 of it the front squat is
