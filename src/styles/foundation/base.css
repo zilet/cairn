@@ -8,7 +8,7 @@ body{
   font-family:var(--font-ui); line-height:var(--leading); font-size:var(--text-body);
   /* Young Serif and Martian Mono ship one or two weights: never fake a bold */
   font-synthesis:style; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
-  padding-bottom:calc(92px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px)); min-height:100dvh;
+  padding-bottom:calc(92px + max(env(safe-area-inset-bottom),6px) + max(0px,var(--vvb,0px))); min-height:100dvh;
 }
 /* paper grain — fixed noise wash over everything, barely-there */
 body::before{

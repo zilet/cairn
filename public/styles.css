@@ -10,7 +10,7 @@
 @font-face{font-family:"Martian Mono";font-style:normal;font-weight:500 800;font-display:swap;src:url("/fonts/martian-mono-latin-500.woff2") format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html{-webkit-text-size-adjust:100%}
-body{background:var(--paper);color:var(--ink);font-family:var(--font-ui);line-height:var(--leading);font-size:var(--text-body);font-synthesis:style;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;padding-bottom:calc(92px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px));min-height:100dvh}
+body{background:var(--paper);color:var(--ink);font-family:var(--font-ui);line-height:var(--leading);font-size:var(--text-body);font-synthesis:style;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;padding-bottom:calc(92px + max(env(safe-area-inset-bottom),6px) + max(0px,var(--vvb,0px)));min-height:100dvh}
 body::before{content:"";position:fixed;inset:0;z-index:var(--z-grain);pointer-events:none;opacity:.035;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E")}
 img,svg{display:block;max-width:100%}
 button{font-family:inherit;color:inherit;cursor:pointer}
@@ -520,7 +520,7 @@ html.kb-up .rest.show{opacity:0;transform:translateY(12px);visibility:hidden;poi
 .rest.rested .rest-fill{background:var(--line-2);transition:none}
 .rest.rested .rest-time{color:var(--ink-2)}
 .rest.rested .rest-btn:not(.rest-skip){visibility:hidden}
-body.resting{padding-bottom:calc(152px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px))}
+body.resting{padding-bottom:calc(152px + max(env(safe-area-inset-bottom),6px) + max(0px,var(--vvb,0px)))}
 .seg{display:flex;gap:var(--space-1);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-pill);padding:var(--space-2);margin:var(--space-1) 0 var(--space-8);position:relative;overflow-x:auto;overflow-y:hidden;scroll-behavior:smooth;scrollbar-width:none;-ms-overflow-style:none}
 .seg::-webkit-scrollbar{display:none}
 .pill-group{display:flex;flex-wrap:wrap;gap:var(--space-3);background:transparent;border:none;padding:0;overflow:visible}
@@ -1244,7 +1244,7 @@ to{opacity:1}
 .savebar.saved .savebar-tick{animation:tickdraw var(--dur-3) var(--ease) .08s forwards}
 @keyframes tickdraw{to{stroke-dashoffset:0}
 }
-body.savebar-open{padding-bottom:calc(168px + var(--vvb,0px))}
+body.savebar-open{padding-bottom:calc(168px + max(0px,var(--vvb,0px)))}
 body.savebar-open .toast{bottom:calc(150px + var(--vvb,0px))}
 body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px))}
 .tabbar{position:fixed;bottom:var(--vvb,0px);left:0;right:0;z-index:var(--z-tabbar);display:flex;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-top:1px solid var(--line);padding-bottom:max(env(safe-area-inset-bottom),6px);transition:transform .22s ease}

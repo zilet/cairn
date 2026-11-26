@@ -253,6 +253,15 @@ test("a stale keyboard-sized viewport on resume never lifts the bottom bars", ()
   assert.equal(env.body.classList.contains("kb-open"), false);
   assert.equal(env.document.documentElement.classList.contains("kb-up"), false);
 
+  // iOS pans the stale viewport as the page scrolls, and fixed bars ride up with the
+  // content by offsetTop (the rest bar drifted mid-screen). The lift cancels the pan.
+  env.visualViewport.offsetTop = 200;
+  env.fireViewport("scroll");
+  assert.equal(env.getStyle("--vvb"), "-200px");
+  env.visualViewport.offsetTop = 0;
+  env.fireViewport("scroll");
+  assert.equal(env.getStyle("--vvb"), "0px");
+
   // A browser's bottom toolbar is a small gap and is still honoured with nothing focused.
   env.visualViewport.height = 743;
   env.fireViewport("resize");

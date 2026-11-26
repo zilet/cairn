@@ -251,10 +251,17 @@
     // field focused and none just tapped, a keyboard-sized gap is that stale reading,
     // not a keyboard, and nothing may be laid out by it (the tab bar sat mid-screen).
     const keyboardPlausible = () => !!focusedTextInput() || keyboardIntentOpen();
-    const keyboardGeometryOpen = () => {
+    const keyboardSizedShrink = () => {
       const layoutShrink = Math.max(0, window.innerHeight - vv.height);
       const visualShrink = Math.max(0, vvMax - vv.height);
-      return Math.max(layoutShrink, visualShrink) > keyboardThreshold() && keyboardPlausible();
+      return Math.max(layoutShrink, visualShrink) > keyboardThreshold();
+    };
+    const keyboardGeometryOpen = () => keyboardSizedShrink() && keyboardPlausible();
+    // The height the screen really shows while the visual viewport is stale, else 0. A
+    // pinch zoom shrinks the viewport the same way and is not stale.
+    const staleViewportHeight = () => {
+      if (!keyboardSizedShrink() || keyboardPlausible() || vv.scale > 1.05) return 0;
+      return window.innerHeight - vvMax > keyboardThreshold() ? window.innerHeight : vvMax;
     };
     const isChatTextInput = (el: EventTarget | Element | null | undefined): el is HTMLElement =>
       textInputEl(el) && Boolean(el.closest?.(".chatview"));
@@ -285,11 +292,15 @@
       // toolbar -> positive. NOT forced to 0 while the keyboard is up — the tab bar is
       // slid off-screen by CSS then, and the toast/rest-bar should float ABOVE the
       // keyboard rather than snap down behind it.
-      // A browser toolbar is small; a keyboard-sized gap with no keyboard plausible is
-      // a stale viewport (see keyboardPlausible) and lifts nothing.
+      // A browser toolbar is small; a keyboard-sized shrink with no keyboard plausible is
+      // a stale viewport (see keyboardPlausible). The screen is really full height, but
+      // iOS still pans its stale visual viewport inside the layout viewport as the page
+      // scrolls, and fixed bars ride up with the content by offsetTop. So the bars are
+      // laid out by the true height, which cancels that pan (negative once panned).
       const rawVvb = window.innerHeight - (vv.offsetTop + vv.height);
-      const stale = rawVvb > keyboardThreshold() && !keyboardPlausible();
-      root.style.setProperty("--vvb", `${stale ? 0 : Math.round(Math.max(0, rawVvb))}px`);
+      const trueHeight = staleViewportHeight();
+      const vvb = trueHeight ? Math.round(window.innerHeight - (vv.offsetTop + trueHeight)) : Math.round(Math.max(0, rawVvb));
+      root.style.setProperty("--vvb", `${vvb}px`);
       // Its top twin: how far iOS has scrolled the visual viewport down (it does as the
       // keyboard rises). A full-screen fixed layer pinned between --vvt and --vvb is
       // exactly the visible area, so its bottom-docked composer rides the keyboard top.

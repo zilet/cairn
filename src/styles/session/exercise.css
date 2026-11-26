@@ -340,5 +340,5 @@ html.kb-up .rest.show{opacity:0;transform:translateY(12px);visibility:hidden;poi
 
 /* while the rest bar is up, give the page enough bottom clearance that the
    content above it (FINISH row, chatbar) can always scroll clear of the bar */
-body.resting{padding-bottom:calc(152px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px))}
+body.resting{padding-bottom:calc(152px + max(env(safe-area-inset-bottom),6px) + max(0px,var(--vvb,0px)))}
 

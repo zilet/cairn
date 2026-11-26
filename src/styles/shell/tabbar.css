@@ -53,7 +53,7 @@
 
 /* while the bar is up: content scrolls clear of it, the toast hops above it,
    and an active rest timer pushes it one shelf higher */
-body.savebar-open{padding-bottom:calc(168px + var(--vvb,0px))}
+body.savebar-open{padding-bottom:calc(168px + max(0px,var(--vvb,0px)))}
 body.savebar-open .toast{bottom:calc(150px + var(--vvb,0px))}
 body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px))}
 
