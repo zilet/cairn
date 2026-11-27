@@ -5,6 +5,16 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.5.2] — 2026-11-27
+
+Train › Program opens with one fewer request.
+
+### Fixed
+
+- **Program opens in one trip.** The movement and muscle read added in 2.5.0 asked for itself
+  after the page had already painted, so the movements arrived a beat late over a slow
+  connection. It now arrives with the rest of the page.
+
 ## [2.5.1] — 2026-11-26
 
 The bars along the bottom of the screen stay on the bottom edge after you come back to the app.
