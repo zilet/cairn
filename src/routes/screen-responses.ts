@@ -50,7 +50,7 @@ import {
 } from "../domain/training/index.js";
 import { dexaTargeting } from "../domain/health/index.js";
 import { todayDateParam } from "../domain/today/index.js";
-import { flexibleTrainingAgenda } from "../repo.js";
+import { capabilityWithLadder, flexibleTrainingAgenda } from "../repo.js";
 import { calibrationStatus, dueCalibrations } from "../repo/calibration.js";
 import { programBalanceRead } from "../repo/program-balance-read.js";
 import { forwardTimeline } from "../repo/forward-timeline.js";
@@ -99,7 +99,7 @@ function screenHour(hourQuery: unknown): number | null {
 /**
  * Train in one request: `view=week` (Train's landing, This week: the week, the look-ahead
  * and the next session's day detail), `view=overview` (the Progress leaf's reads), `program`
- * (Program's state, anchors, performance, block, adjustments, test week, trajectory,
+ * (Program's state, the capability read, anchors, performance, block, adjustments, test week, trajectory,
  * DEXA targeting) or `endurance` (the Endurance screen's week). Two screens that grew
  * out of Train's reads ride the same fan-in: `goal` (Horizon -> Goal line: the journey
  * story, its milestones, the road-ahead timeline — the cards Train's overview used to
@@ -156,6 +156,9 @@ export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQ
     // No today's-lift line: Train's home no longer repeats the Brief's (one home per fact).
   } else if (view === "program") {
     put(out, "/program-state", () => getProgramState(undefined));
+    // The full capability read the landing fills its movements from. Program state has
+    // already taken the same memoized read for its summary, so this adds no second pass.
+    put(out, "/strength-capability", () => capabilityWithLadder());
     put(out, "/strength-journeys", () => ({ journeys: getStrengthJourneys() }));
     put(out, "/strength-journey", () => strengthJourneyRead());
     put(out, "/performance", () => performanceStanding(undefined));

@@ -82,7 +82,7 @@ test("GET /train-home answers each view's reads, each exactly as its own route d
   const expected = {
     overview: ["/stats", "/program/balance", "/muscle-trajectory", "/coaching-focus", "/muscle-load", "/training-load",
       "/program/adjustments", "/sessions?limit=3", "/journey", "/journey/milestones", "/journey/timeline"],
-    program: ["/coaching-focus", "/program-state", "/strength-journeys", "/strength-journey", "/performance",
+    program: ["/coaching-focus", "/program-state", "/strength-capability", "/strength-journeys", "/strength-journey", "/performance",
       "/program/blocks/active", "/program/adjustments", "/test-week", "/muscle-trajectory", "/dexa-targeting",
       "/plan/look-ahead"],
     endurance: ["/stats", "/endurance-prs", "/endurance-goal", "/run-compliance", "/settings", "/run-plan", "/race-build",

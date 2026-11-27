@@ -21,7 +21,7 @@ type TrainFanInView = "overview" | "week" | "program" | "endurance" | "goal";
     if (view === "week") return ["/plan/week", "/plan/look-ahead"];
     if (view === "program") {
       return [
-        "/coaching-focus", "/program-state", "/strength-journeys", "/strength-journey", "/performance",
+        "/coaching-focus", "/program-state", "/strength-capability", "/strength-journeys", "/strength-journey", "/performance",
         "/program/blocks/active", "/program/adjustments", "/test-week", "/muscle-trajectory", "/dexa-targeting",
         "/plan/look-ahead",
       ];
