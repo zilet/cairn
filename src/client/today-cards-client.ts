@@ -295,13 +295,15 @@ function exerciseCardHtml(
         ${showRir ? `<input type="number" inputmode="decimal" placeholder="RIR" class="in-rir" title="Reps in reserve — how many more you could have done" aria-label="RIR (reps in reserve)" value="${prefill.rir ?? ""}">` : ""}
         <button class="logbtn" aria-label="${escAttr(`Log a set of ${exercise}`)}">Log</button>
       </div>${addLoad}`;
+  const addedMid = item.added_mid_session === true;
   const skipButton =
-    !offPlan && !exerciseLogged
+    !offPlan && !addedMid && !exerciseLogged
       ? `<button class="ex-skip" data-skip="${encodeURIComponent(exercise)}" title="Not today" aria-label="Skip ${escAttr(exercise)} today">✕</button>`
       : "";
+  const removeAttr = addedMid && !offPlan ? `data-remove-added="${encodeURIComponent(exercise)}"` : "data-remove-card";
   const removeButton =
-    offPlan && !done
-      ? `<button class="ex-skip ex-remove" data-remove-card title="Remove" aria-label="Remove ${escAttr(exercise)}">✕</button>`
+    (offPlan || addedMid) && !done
+      ? `<button class="ex-skip ex-remove" ${removeAttr} title="Remove" aria-label="Remove ${escAttr(exercise)}">✕</button>`
       : "";
   // The quiet "Last time: …" target line, only before anything's logged today for
   // this exercise — mirrors loadLastSets' own not-yet-logged scoping (today-plan-

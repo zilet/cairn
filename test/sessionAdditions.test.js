@@ -134,6 +134,18 @@ test("appendDailySessionItems appends onto an already-started session without to
     /only strength exercises/i
   );
 
+  // Refuses appending onto a finished session.
+  db.prepare(`UPDATE sessions SET finished_at = datetime('now') WHERE id = ?`).run(prepared.session_id);
+  assert.throws(
+    () =>
+      appendDailySessionItems({
+        date: DATE,
+        origin: "ideation_add",
+        items: [{ exercise: "Tricep Pushdown", mode: "reps", sets: 3, rep_low: 10, rep_high: 12 }],
+      }),
+    /already finished/i
+  );
+
   // Weekly plan is untouched.
   assert.deepEqual(repo.getPlan(), beforePlan);
 });
@@ -309,7 +321,16 @@ test("REST endpoints (/session-additions and /daily-session/items) and MCP tools
   assert.equal(added.added[0].exercise, pick.exercise);
   assert.equal(added.added[0].added_job_id, queued.job.id);
 
-  // Verify MCP tool registration includes both new tools.
+  // Verify REST DELETE /daily-session/items removes an unlogged mid-session addition.
+  const resRemove = await routerRequest("DELETE", "/daily-session/items", {
+    date: DATE,
+    exercise: pick.exercise,
+  });
+  assert.equal(resRemove.status, 200);
+  assert.equal(resRemove.body.ok, true);
+  assert.equal(resRemove.body.removed, pick.exercise);
+
+  // Verify MCP tool registration includes all three new tools and remove_daily_session_item works/guards.
   const registered = new Map();
   registerDayCoachTools({
     tool(name, description, schema, handler) {
@@ -318,6 +339,7 @@ test("REST endpoints (/session-additions and /daily-session/items) and MCP tools
   });
   assert.ok(registered.has("suggest_session_additions"));
   assert.ok(registered.has("append_daily_session_items"));
+  assert.ok(registered.has("remove_daily_session_item"));
   const mcpAdd = await registered.get("append_daily_session_items").handler({
     date: NEXT_DAY,
     origin: "ideation_add",
@@ -326,4 +348,22 @@ test("REST endpoints (/session-additions and /daily-session/items) and MCP tools
   const parsed = JSON.parse(mcpAdd.content[0].text);
   assert.equal(parsed.ok, true);
   assert.equal(parsed.added[0].exercise, "Face Pull");
+
+  const mcpRemove = await registered.get("remove_daily_session_item").handler({
+    date: NEXT_DAY,
+    exercise: "Face Pull",
+  });
+  const parsedRemove = JSON.parse(mcpRemove.content[0].text);
+  assert.equal(parsedRemove.ok, true);
+  assert.equal(parsedRemove.removed, "Face Pull");
+});
+
+test("buildMidSessionSnapshot excludes alias spellings of logged lifts via liftAlternatives", () => {
+  repo.findOrCreateExercise("Dumbbell Biceps Curl", "biceps", undefined, "reps");
+  prepareDailySession({ date: DATE, source: "manual_plan", day_number: 1 });
+  repo.logSetByName({ date: DATE, exercise: "DB Bicep Curl", weight: 30, reps: 10 });
+  const snapshot = buildMidSessionSnapshot(DATE);
+  const candidateNames = snapshot.candidate_pool.map((c) => c.exercise.toLowerCase());
+  assert.ok(!candidateNames.includes("dumbbell biceps curl"));
+  assert.ok(!candidateNames.includes("db bicep curl"));
 });

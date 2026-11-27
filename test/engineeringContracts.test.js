@@ -489,10 +489,10 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   // Earned recovery week dry run: +1 (get_recovery_week_preview) in
   // src/surfaces/mcp/plan-exercises.ts — the mirror of GET /api/plan/recovery-week-preview,
   // a pure read of what the daily recovery-week pass would set up next.
-  // Mid-session additions: +2 (suggest_session_additions, append_daily_session_items) in
-  // src/surfaces/mcp/day-coach.ts — the mirrors of POST /api/session-additions and
-  // POST /api/daily-session/items.
-  assert.equal(tools.length, 313,"tool count changes only for reviewed MCP additions");
+  // Mid-session additions: +3 (suggest_session_additions, append_daily_session_items,
+  // remove_daily_session_item) in src/surfaces/mcp/day-coach.ts — the mirrors of
+  // POST /api/session-additions and POST/DELETE /api/daily-session/items.
+  assert.equal(tools.length, 314,"tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);

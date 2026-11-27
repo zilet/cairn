@@ -11,7 +11,8 @@ import {
   resolveExerciseName,
 } from "./exercise-canon.js";
 import { exerciseInputFor, type ExerciseInput } from "./exercise-input.js";
-import { examplesForGroup, suggestAlternatives } from "./exercise-variations.js";
+import { examplesForGroup } from "./exercise-variations.js";
+import { liftAlternatives } from "./exercise-suggestions.js";
 import {
   findExercise,
   getExercise,
@@ -230,12 +231,15 @@ export function buildMidSessionSnapshot(
     ? session.skips.map((name) => String(name ?? "").trim()).filter(Boolean)
     : [];
   const extraExclude = Array.isArray(opts.exclude) ? opts.exclude : [];
-  const excludeKeySet = new Set<string>([
-    ...loggedKeys,
-    ...remaining.map((item) => normalizedExerciseKey(item.exercise)),
-    ...skipped.map((name) => normalizedExerciseKey(name)),
-    ...extraExclude.map((name) => normalizedExerciseKey(String(name ?? ""))),
-  ].filter(Boolean));
+  const excludeNames = [
+    ...logged.map((l) => l.exercise),
+    ...remaining.map((r) => r.exercise),
+    ...skipped,
+    ...extraExclude.map((name) => String(name ?? "").trim()),
+  ].filter(Boolean);
+  const excludeKeySet = new Set<string>(
+    excludeNames.map((name) => normalizedExerciseKey(name)).filter(Boolean)
+  );
 
   const injuryAreas = readInjuryAreas(date);
   let excludedMuscles: string[] = [];
@@ -276,24 +280,34 @@ export function buildMidSessionSnapshot(
   const candidatePool: MidSessionCandidate[] = [];
   const candidateKeys = new Set<string>();
 
-  const pushCandidate = (name: string, groupHint?: string | null, modeHint?: string | null, eqHint?: string | null) => {
-    const key = normalizedExerciseKey(name);
+  const pushCandidate = (
+    name: string,
+    groupHint?: string | null,
+    modeHint?: string | null,
+    eqHint?: string | null,
+    knownRow?: any | null
+  ) => {
+    const row = knownRow ?? findExercise(name);
+    const canonical = row?.name ? String(row.name) : name;
+    const key = normalizedExerciseKey(canonical);
     if (!key || excludeKeySet.has(key) || candidateKeys.has(key)) return;
-    const group = resolveMuscleGroupFor(name, groupHint);
+    const rawGroup = row?.muscle_group ?? groupHint;
+    const group = rawGroup
+      ? (canonicalGroup(String(rawGroup)) ?? String(rawGroup).trim().toLowerCase())
+      : (classifyMuscleGroup(canonical) ?? null);
     if (group && excludedSet.has(group)) return;
-    const row = findExercise(name);
     const mode: "reps" | "timed" =
       row?.mode === "timed" || modeHint === "timed" ? "timed" : "reps";
-    const recentWeight = recentWorkingWeight(name);
-    const recentSeconds = mode === "timed" ? recentWorkingSeconds(name) : null;
+    const recentWeight = recentWorkingWeight(canonical);
+    const recentSeconds = mode === "timed" ? recentWorkingSeconds(canonical) : null;
     candidateKeys.add(key);
     candidatePool.push({
-      exercise: row?.name ? String(row.name) : name,
+      exercise: canonical,
       muscle_group: group,
       mode,
       recent_weight: recentWeight,
       recent_seconds: recentSeconds,
-      bodyweight: isKnownBodyweightMovement(name, row?.equipment ?? eqHint),
+      bodyweight: isKnownBodyweightMovement(canonical, row?.equipment ?? eqHint),
     });
   };
 
@@ -301,7 +315,7 @@ export function buildMidSessionSnapshot(
   for (const seed of [...logged.map((l) => l.exercise), ...remaining.map((r) => r.exercise)]) {
     if (candidatePool.length >= 10) break;
     try {
-      const alts = suggestAlternatives(seed, { limit: 3, injuryAreas });
+      const alts = liftAlternatives(seed, { limit: 3, injuryAreas, excludeNames });
       for (const alt of alts) {
         pushCandidate(alt.name, null, null, alt.equipment ?? null);
         if (candidatePool.length >= 10) break;
@@ -328,7 +342,7 @@ export function buildMidSessionSnapshot(
       });
     for (const row of catalog) {
       if (candidatePool.length >= 18) break;
-      pushCandidate(row.name, row.muscle_group, row.mode, row.equipment);
+      pushCandidate(row.name, row.muscle_group, row.mode, row.equipment, row);
     }
   } catch {
     /* ignore */

@@ -15,7 +15,7 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getAgentJob } from "./chat.js";
 import { isKnownBodyweightMovement, normalizedExerciseKey, resolveExerciseName } from "./exercise-canon.js";
 import { exerciseInputFor } from "./exercise-input.js";
-import { findExercise, findOrCreateExercise, getExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
+import { findExercise, findOrCreateExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { getPlanDay } from "./plan.js";
 import { selectedPlanDayForDate } from "./plan-selection.js";
 import { getOrCreateSessionRow } from "./session-core.js";
@@ -1903,24 +1903,6 @@ export interface RemoveAddedDailySessionItemInput {
   exercise: string;
 }
 
-function resolveCanonicalItemExercise(raw: unknown): unknown {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const item = raw as Record<string, unknown>;
-  if (item.kind === "cardio") {
-    fail("daily_session_invalid", "only strength exercises can be added to a lifting session");
-  }
-  const typed = boundedText(item.exercise, 120);
-  if (!typed) return raw;
-  const existing = findExercise(typed);
-  if (existing?.name) return { ...item, exercise: String(existing.name) };
-  const resolved = resolveExerciseName(typed);
-  if (resolved.exercise_id != null) {
-    const row = getExercise(resolved.exercise_id);
-    if (row?.name) return { ...item, exercise: String(row.name) };
-  }
-  return { ...item, exercise: typed };
-}
-
 /**
  * Append strength items onto the active daily session for `date` without replacing
  * the session or mutating the weekly plan. Safe on already-started sessions.
@@ -1939,8 +1921,7 @@ export function appendDailySessionItems(input: AppendDailySessionItemsInput) {
   const sourceJobId = rawJobId != null && Number.isInteger(rawJobId) && rawJobId > 0 ? rawJobId : null;
 
   const normalizedItems: Record<string, unknown>[] = input.items.map((raw, index) => {
-    const resolved = resolveCanonicalItemExercise(raw);
-    const normalized = normalizeItem(resolved, index, agentSource, !agentSource, false) as Record<string, unknown>;
+    const normalized = normalizeItem(raw, index, agentSource, !agentSource, false) as Record<string, unknown>;
     if (normalized.kind === "cardio") {
       fail("daily_session_invalid", "only strength exercises can be added to a lifting session");
     }
@@ -1968,13 +1949,25 @@ export function appendDailySessionItems(input: AppendDailySessionItemsInput) {
       if (!active) fail("daily_session_missing", "failed to prepare an active daily session");
     }
 
+    const boundSession = db
+      .prepare(`SELECT finished_at FROM sessions WHERE id = ?`)
+      .get(Number(active.session_id)) as { finished_at?: string | null } | undefined;
+    if (boundSession?.finished_at != null) {
+      fail(
+        "daily_session_locked",
+        "This session is already finished — reopen it before adding exercises.",
+        undefined,
+        compositionOwner(date, active)
+      );
+    }
+
     const parsedExisting = parseJson(active.items_json);
     const existing: Record<string, unknown>[] = Array.isArray(parsedExisting)
       ? parsedExisting.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
       : [];
     const existingKeys = new Set(
       existing
-        .map((item) => normalizedExerciseKey(String(item.exercise ?? "")))
+        .map((item) => normalizedExerciseKey(storedExerciseName(String(item.exercise ?? ""))))
         .filter(Boolean)
     );
 

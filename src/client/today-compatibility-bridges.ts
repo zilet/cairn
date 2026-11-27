@@ -109,7 +109,27 @@ function makeTodayCompatibilityBridges(input: TodayCompatibilityBridgesInput): T
     async setupAddExercise() {
       const addDeps = addExerciseDeps();
       await CairnTodayAddExerciseController.setupAddExercise(addDeps);
+      const removeAddedCard = async (exercise: string, card: HTMLElement | null) => {
+        const sess = sessionDeps();
+        const res = (await sess.api("/daily-session/items", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date: addDeps.state.logDate, exercise }),
+          acceptErrorBody: true,
+        })) as Record<string, unknown> | null;
+        if (!res || res.ok !== true) {
+          sess.toast(String(res?.error || `Couldn't remove ${exercise}.`));
+          return;
+        }
+        if (card) sess.collapseEl(card, () => card.remove());
+        if (typeof CairnWriteInvalidation !== "undefined") CairnWriteInvalidation.invalidateWrite("session_add_items");
+        for (const p of ["today:session:", "today:daily-session:", "today:aggregate:", "today:open:"]) {
+          sess.invalidate(p + addDeps.state.logDate);
+        }
+        sess.toast(`Removed ${exercise}`);
+      };
       if (typeof CairnTodaySessionAskSheet !== "undefined") {
+        CairnTodaySessionAskSheet.wireAddedRemovals?.(addDeps.root, removeAddedCard);
         CairnTodaySessionAskSheet.wireIdeateButton?.(addDeps.root, () => {
           void withBundle("session-ideate", () => {
             const suggest = sessionSuggestDeps();
@@ -123,9 +143,13 @@ function makeTodayCompatibilityBridges(input: TodayCompatibilityBridgesInput): T
               wireGuides: addDeps.wireGuides,
               wireLogRow: addDeps.wireLogRow,
               wireSkips: addDeps.wireSkips,
+              onCardInserted: (cardEl: HTMLElement) => {
+                CairnTodaySessionAskSheet?.wireAddedRemovals?.(cardEl, removeAddedCard);
+              },
               invalidate: suggest.invalidate,
               reducedMotion: suggest.reducedMotion,
-              toast: addDeps.toast,
+              toast: sess.toast,
+              collapseEl: sess.collapseEl,
               fmtDur: sess.fmtDur,
             });
           });

@@ -236,6 +236,17 @@
         "brotli": 7168
       }
     },
+    "public/js/bundle-23-session-ideate.js": {
+      "lazy": "session-ideate",
+      "measured": {
+        "raw": 17854,
+        "brotli": 4832
+      },
+      "budget": {
+        "raw": 20480,
+        "brotli": 7168
+      }
+    },
     "public/styles.css": {
       "measured": {
         "raw": 513323,
@@ -319,6 +330,17 @@
       "budget": {
         "raw": 17408,
         "brotli": 5120
+      }
+    },
+    "public/css/session-ideate.css": {
+      "lazy": "session-ideate",
+      "measured": {
+        "raw": 3659,
+        "brotli": 893
+      },
+      "budget": {
+        "raw": 6144,
+        "brotli": 3072
       }
     }
   }

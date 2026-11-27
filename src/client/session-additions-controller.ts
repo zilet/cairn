@@ -18,9 +18,11 @@ type SessionAdditionsControllerDeps = {
   wireGuides(card: Element): void;
   wireLogRow(row: Element | null): void;
   wireSkips(): void;
+  onCardInserted?(cardEl: HTMLElement): void;
   invalidate(keyOrPrefix: string): void;
   reducedMotion(): boolean;
-  toast(message: string): void;
+  toast(message: string, options?: { action?: string; onAction?: () => void }): void;
+  collapseEl?(el: Element, done?: () => void): void;
   fmtDur?(seconds: number): string;
 };
 
@@ -71,6 +73,7 @@ type SessionAdditionRow = Record<string, unknown> & {
       CairnTodaySessionSetModel.wireLastSetLine(logRow, lastSet, deps as never);
     }
     deps.wireSkips();
+    deps.onCardInserted?.(cardEl);
     if (item.mode && name) {
       (deps.state.exModes ??= {})[name] = String(item.mode);
     }
@@ -180,7 +183,18 @@ type SessionAdditionRow = Record<string, unknown> & {
         }
 
         const addedList = Array.isArray(res.added) ? (res.added as Array<Record<string, unknown>>) : [];
-        const cardItem = addedList[0] ?? suggestion;
+        const skippedDups = Array.isArray(res.skipped_duplicates) ? res.skipped_duplicates : [];
+        if (addedList.length === 0 && skippedDups.length > 0) {
+          addedKeys.add(key);
+          button.dataset.busy = "";
+          button.classList.add("is-added");
+          button.textContent = "Added ✓";
+          deps.toast(`${exercise} is already on today's session`);
+          return;
+        }
+
+        const cardItem = addedList[0] ?? { ...suggestion, added_mid_session: true };
+        const addedName = String(cardItem.exercise || exercise);
         const lastSet =
           suggestion.last_set && typeof suggestion.last_set === "object"
             ? suggestion.last_set
@@ -197,7 +211,36 @@ type SessionAdditionRow = Record<string, unknown> & {
         button.dataset.busy = "";
         button.classList.add("is-added");
         button.textContent = "Added ✓";
-        deps.toast(`Added ${String(cardItem.exercise || exercise)} to today's session`);
+        deps.toast(`Added ${addedName} to today's session`, {
+          action: "Undo",
+          onAction: () => {
+            void (async () => {
+              const del = (await deps.api("/daily-session/items", {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ date: deps.state.logDate, exercise: addedName }),
+                acceptErrorBody: true,
+              })) as Record<string, unknown> | null;
+              if (!del || del.ok !== true) {
+                deps.toast(String(del?.error || `Couldn't remove ${addedName}.`));
+                return;
+              }
+              addedKeys.delete(key);
+              if (cardEl?.isConnected) {
+                if (typeof deps.collapseEl === "function") deps.collapseEl(cardEl, () => cardEl.remove());
+                else cardEl.remove();
+                if (firstAddedCard === cardEl) firstAddedCard = null;
+              }
+              invalidateSessionCaches(deps.state.logDate, deps);
+              if (button.isConnected) {
+                button.disabled = false;
+                button.classList.remove("is-added");
+                button.textContent = "+ Add";
+              }
+              deps.toast(`Removed ${addedName}`);
+            })();
+          },
+        });
       } catch (err) {
         button.dataset.busy = "";
         button.disabled = false;

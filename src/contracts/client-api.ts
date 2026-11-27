@@ -1578,6 +1578,16 @@ export type ClientDailySessionItemsAppendResponse =
     }
   | ClientDailySessionError;
 
+export type ClientDailySessionItemRemoveResponse =
+  | {
+      ok: true;
+      date: ISODateString | string;
+      removed: string;
+      daily_session: ClientDailySessionComposition;
+      session_id: number;
+    }
+  | ClientDailySessionError;
+
 export interface ClientActivity {
   id: number;
   type?: string | null;
@@ -4620,7 +4630,7 @@ export interface ClientApiResponses {
   "/api/daily-session": ClientDailySessionComposition | null;
   "/api/daily-session/preview": ClientDailySessionPreview | null;
   "/api/daily-session/prepare": ClientDailySessionPrepareResponse;
-  "/api/daily-session/items": ClientDailySessionItemsAppendResponse;
+  "/api/daily-session/items": ClientDailySessionItemsAppendResponse | ClientDailySessionItemRemoveResponse;
   "/api/daily-session/discard": ClientDailySessionDiscardResponse;
   "/api/daily-session/outcome": ClientDailySessionOutcomeRead | null;
   "/api/session-primer": ClientSessionPrimer | null;

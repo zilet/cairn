@@ -4815,6 +4815,10 @@ declare global {
     CairnTodaySessionAskSheet?: {
       open(reveal: () => void): boolean;
       wireIdeateButton?(root: ParentNode | null | undefined, openIdeate: () => void): void;
+      wireAddedRemovals?(
+        root: ParentNode | null | undefined,
+        onRemove: (exercise: string, card: HTMLElement | null) => Promise<void> | void
+      ): void;
     };
     CairnSessionAdditionsModel: {
       IDEATE_VIBES: readonly string[];

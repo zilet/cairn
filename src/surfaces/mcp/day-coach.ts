@@ -6,6 +6,7 @@ import {
   isDailySessionAbsence,
   prepareDailySessionUseCase,
   previewAdaptiveDailySessionUseCase,
+  removeAddedDailySessionItemUseCase,
 } from "../../domain/training/index.js";
 import { tradeRestDay } from "../../domain/brain/index.js";
 import { answerBriefAsk, briefAsks } from "../../domain/today/brief-asks.js";
@@ -253,6 +254,22 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
     async ({ date, items, origin, source_job_id }) => {
       try {
         return asText(appendDailySessionItemsUseCase({ date, items, origin, source_job_id }));
+      } catch (error) {
+        return asText(dailySessionErrorBody(error));
+      }
+    }
+  );
+
+  server.tool(
+    "remove_daily_session_item",
+    "Remove a mid-session added strength exercise from today's active daily session (mirror of DELETE /api/daily-session/items). Only unlogged mid-session additions can be removed; core planned exercises or exercises with logged sets are refused with daily_session_locked.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      exercise: z.string().min(1).describe("exact exercise name to remove"),
+    },
+    async ({ date, exercise }) => {
+      try {
+        return asText(removeAddedDailySessionItemUseCase({ date, exercise }));
       } catch (error) {
         return asText(dailySessionErrorBody(error));
       }

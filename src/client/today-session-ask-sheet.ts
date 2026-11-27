@@ -78,7 +78,28 @@
     btn.addEventListener("click", openIdeate);
   }
 
-  const CAIRN_TODAY_SESSION_ASK_SHEET = { open: openAskSheet, wireIdeateButton };
+  function wireAddedRemovals(
+    root: ParentNode | null | undefined,
+    onRemove: (exercise: string, card: HTMLElement | null) => Promise<void> | void
+  ): void {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    root.querySelectorAll<HTMLElement>("[data-remove-added]").forEach((btn) => {
+      if (btn.dataset.wiredRemoveAdded === "1") return;
+      btn.dataset.wiredRemoveAdded = "1";
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (btn.dataset.busy === "1") return;
+        const exercise = decodeURIComponent(btn.dataset.removeAdded || "");
+        if (!exercise) return;
+        btn.dataset.busy = "1";
+        void Promise.resolve(onRemove(exercise, btn.closest<HTMLElement>(".ex"))).finally(() => {
+          btn.dataset.busy = "";
+        });
+      });
+    });
+  }
+
+  const CAIRN_TODAY_SESSION_ASK_SHEET = { open: openAskSheet, wireIdeateButton, wireAddedRemovals };
 
   Object.assign(globalThis, { CairnTodaySessionAskSheet: CAIRN_TODAY_SESSION_ASK_SHEET });
   if (typeof window !== "undefined") {

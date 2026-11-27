@@ -12,6 +12,7 @@ import {
   isDailySessionConflict,
   prepareDailySessionUseCase,
   previewAdaptiveDailySessionUseCase,
+  removeAddedDailySessionItemUseCase,
 } from "../domain/training/index.js";
 import {
   dailyOutcomeRead,
@@ -342,6 +343,22 @@ dayCoachRouter.post("/daily-session/items", (req, res) => {
         items: body.items,
         origin: body.origin,
         source_job_id: body.source_job_id,
+      })
+    );
+  } catch (error: any) {
+    res.status(isDailySessionConflict(error) ? 409 : 400).json(dailySessionErrorBody(error));
+  }
+});
+
+// Remove an unlogged mid-session addition from today's active daily session (supports Undo
+// and card remove buttons without disturbing the rest of the session).
+dayCoachRouter.delete("/daily-session/items", (req, res) => {
+  const body = req.body ?? {};
+  try {
+    res.json(
+      removeAddedDailySessionItemUseCase({
+        date: body.date != null ? String(body.date) : req.query.date != null ? String(req.query.date) : undefined,
+        exercise: String(body.exercise ?? req.query.exercise ?? ""),
       })
     );
   } catch (error: any) {

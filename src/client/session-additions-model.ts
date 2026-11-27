@@ -69,9 +69,10 @@ type SessionAdditionSuggestion = {
 
   function loadSuffix(item: SessionAdditionSuggestion): string {
     const n = item.target_weight == null || item.target_weight === "" ? null : Number(item.target_weight);
-    if (n != null && Number.isFinite(n)) {
-      if (n < 0) return ` · ${Math.abs(n)} assist`;
-      if (n > 0) return ` · ${n} lb`;
+    if (n != null && Number.isFinite(n) && n !== 0) {
+      const formatted =
+        typeof fmtWeight === "function" ? fmtWeight(n) : n < 0 ? `${Math.abs(n)} assist` : `${n}`;
+      return ` · ${formatted}`;
     }
     if (item.load_basis === "bodyweight") return " · BW";
     return "";
