@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  appendDailySessionItemsUseCase,
   dailySessionErrorBody,
   discardDailySessionUseCase,
   isDailySessionAbsence,
@@ -101,6 +102,26 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
         queueMcpAgentJob(
           "session_compose",
           { minutes, equipment, override, train_anyway, date: date ?? localDateISO() },
+          agent
+        )
+      )
+  );
+
+  server.tool(
+    "suggest_session_additions",
+    "Queue a fast mid-session ideation run for 3-4 complementary strength exercises to add right now, grounded in what is already logged today, remaining card items, skips, active injuries/symptoms, and tomorrow's run/lift. Returns a job immediately; poll get_agent_job. Preview-only; append chosen items via append_daily_session_items. Never mutates the weekly plan.",
+    {
+      focus: z.string().optional().describe("optional muscle/quality focus, e.g. 'arms' or 'core'"),
+      constraints: z.string().optional().describe("optional free-text steer, e.g. 'feeling strong, 10 min finisher'"),
+      exclude: z.array(z.string()).optional().describe("exercise names to exclude from suggestions"),
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
+    },
+    async ({ focus, constraints, exclude, date, agent }) =>
+      asText(
+        queueMcpAgentJob(
+          "session_additions",
+          { focus, constraints, exclude, date: date ?? localDateISO() },
           agent
         )
       )
@@ -210,6 +231,28 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
     async (input) => {
       try {
         return asText(prepareDailySessionUseCase(input));
+      } catch (error) {
+        return asText(dailySessionErrorBody(error));
+      }
+    }
+  );
+
+  server.tool(
+    "append_daily_session_items",
+    "Append 1-8 strength exercises onto today's active daily session without replacing it or mutating the weekly plan. Safe on already-started sessions with logged sets. If no active composition exists yet for the date, opens/adopts one first.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      items: z
+        .array(z.unknown())
+        .min(1)
+        .max(8)
+        .describe("strength exercise items ({ exercise, mode, sets, rep_low, rep_high, target_weight, target_seconds, note })"),
+      origin: z.enum(["ideation_add", "athlete_add"]).optional().describe("provenance of the added items"),
+      source_job_id: z.number().int().positive().optional().describe("optional session_additions agent job id"),
+    },
+    async ({ date, items, origin, source_job_id }) => {
+      try {
+        return asText(appendDailySessionItemsUseCase({ date, items, origin, source_job_id }));
       } catch (error) {
         return asText(dailySessionErrorBody(error));
       }

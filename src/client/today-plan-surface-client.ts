@@ -167,7 +167,10 @@ type TodayRunLineDeps = Pick<TodayPlanSurfaceDeps, "escapeHtml"> & {
 
   function addExerciseFormHtml(): string {
     return `<div class="addex">
-      <button id="addExBtn" class="ghostbtn addex-btn">+ Add exercise</button>
+      <div class="addex-actions">
+        <button id="addExBtn" class="ghostbtn addex-btn" type="button">+ Add exercise</button>
+        <button id="ideateExBtn" class="ghostbtn addex-ideate" type="button">Ideas to add</button>
+      </div>
       <div id="addExForm" class="addex-form" hidden>
         <div class="addex-row">
           <label for="addExInput" class="sr-only">Exercise name</label>

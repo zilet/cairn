@@ -26,6 +26,7 @@ import { dayReadFinalKinds } from "../agent-contracts.js";
 import { todayPath, todayPathPromptView } from "../repo/today-path.js";
 import { localDateISO } from "../repo/shared.js";
 import { FUEL_CLAIM_RULE } from "../repo/fuel-claims.js";
+import type { MidSessionSnapshot } from "../repo/session-additions.js";
 import {
   activeInjuryAreas,
   COACHING_STANCE,
@@ -917,6 +918,122 @@ ${renderStreamingContract(
 
 DATA:
 ${promptData(context, "session")}`;
+}
+
+// ---------- mid-session exercise additions ("Ideas to add") ----------
+const SESSION_ADDITIONS_PROSE_SCHEMA = `{
+  "why": "<ONE calm plain-language sentence framing how these options fit what they already did today>",
+  "suggestions": [
+    {
+      "exercise": "<exact canonical name; prefer candidate_pool names when sensible>",
+      "mode": "reps|timed",
+      "sets": <integer 1-6>,
+      "rep_low": <integer|null>,
+      "rep_high": <integer|null>,
+      "target_weight": <number|null, negative = assisted, null = bodyweight OR unanchored>,
+      "target_seconds": <integer|null>,
+      "fit": "<4-10 plain words on why this fits right now>",
+      "note": "<optional short cue, or null>"
+    }
+  ]
+}`;
+
+export function buildSessionAdditionsPrompt(
+  snapshot: MidSessionSnapshot,
+  opts: { focus?: string; constraints?: string } = {},
+  ctx?: CoachContext
+): string {
+  const context = dateScopedPromptContext(ctx ?? getCoachContext(), snapshot.date);
+  const loggedLines = snapshot.logged.length
+    ? snapshot.logged
+        .map((l) => {
+          const load =
+            l.top_weight != null
+              ? ` @ ${l.top_weight}`
+              : l.top_seconds != null
+                ? ` (${l.top_seconds}s)`
+                : "";
+          return `- ${l.exercise}${l.muscle_group ? ` (${l.muscle_group})` : ""}: ${l.sets} set${l.sets === 1 ? "" : "s"}${load}`;
+        })
+        .join("\n")
+    : "(nothing logged yet today)";
+  const remainingLines = snapshot.remaining.length
+    ? snapshot.remaining
+        .map((r) => `- ${r.exercise}${r.muscle_group ? ` (${r.muscle_group})` : ""}`)
+        .join("\n")
+    : "(none remaining)";
+  const candidateLines = snapshot.candidate_pool
+    .slice(0, 18)
+    .map((c) => {
+      const anchor =
+        c.mode === "timed"
+          ? c.recent_seconds != null
+            ? ` · recent ${c.recent_seconds}s`
+            : ""
+          : c.bodyweight
+            ? " · bodyweight"
+            : c.recent_weight != null
+              ? ` · recent ${c.recent_weight} lb`
+              : "";
+      return `- ${c.exercise}${c.muscle_group ? ` (${c.muscle_group})` : ""} [${c.mode}${anchor}]`;
+    })
+    .join("\n");
+
+  const steerBits: string[] = [];
+  if (opts.focus?.trim()) steerBits.push(`FOCUS: ${opts.focus.trim()}`);
+  if (opts.constraints?.trim()) steerBits.push(`STEER: "${opts.constraints.trim()}"`);
+
+  const cautions: string[] = [];
+  if (snapshot.excluded_muscles.length) {
+    cautions.push(`DO NOT suggest movements loading: ${snapshot.excluded_muscles.join(", ")}.`);
+  }
+  if (snapshot.injury_areas.length) {
+    cautions.push(`Active injuries/symptoms to protect: ${snapshot.injury_areas.join(", ")}.`);
+  }
+  if (snapshot.saturated_muscles.length || snapshot.reduced_muscles.length) {
+    const sat = [...new Set([...snapshot.saturated_muscles, ...snapshot.reduced_muscles])];
+    cautions.push(`Already carrying heavy recent work (keep light or avoid unless asked): ${sat.join(", ")}.`);
+  }
+  if (snapshot.key_run_tomorrow) {
+    cautions.push(
+      `Tomorrow has a ${snapshot.key_run_tomorrow.kind} run (${snapshot.key_run_tomorrow.date}) — avoid heavy leg fatigue unless asked.`
+    );
+  }
+  if (snapshot.skipped.length) {
+    cautions.push(`Already skipped today (never re-suggest): ${snapshot.skipped.join(", ")}.`);
+  }
+  if (snapshot.equipment) {
+    cautions.push(`Equipment constraint: ${snapshot.equipment}.`);
+  }
+
+  return `${CAIRN_PERSONA}
+
+Right now the athlete is mid-session and asked for 3–4 quick ideas for extra strength exercises they could add right now. Each idea is an individual option they can tap "+ Add" on — never a whole new workout and never cardio.
+${renderNow(context)}
+TODAY'S SESSION${snapshot.session_title ? ` (${snapshot.session_title})` : ""}:
+Already logged:
+${loggedLines}
+
+Still remaining on today's card:
+${remainingLines}
+
+${cautions.length ? `SAFETY & CONTEXT:\n${cautions.map((c) => `- ${c}`).join("\n")}\n` : ""}${steerBits.length ? `ATHLETE DIRECTION:\n${steerBits.join("\n")}\n` : ""}
+GROUNDED CANDIDATES (reuse these canonical names and recent weights where they fit; you may add another safe movement if needed, never duplicate anything logged/remaining/skipped):
+${candidateLines || "(choose simple, joint-friendly strength accessories)"}
+
+RULES:
+- Suggest 3 to 4 distinct strength exercises (mode "reps" or "timed", NEVER cardio).
+- Match realistic conservative sets (usually 2–3) and reps (or seconds if timed) for an add-on late in a session.
+- ${MECHANICS_ENCODING}
+- Speak like a calm friend on the gym floor: no 0-100 scores, no hype, no metric dumps.
+${renderTrainingConstraints(context)}
+${renderStreamingContract(
+  'write ONE calm sentence explaining how these options complement what they already lifted today (the same sentence that goes in "why")',
+  SESSION_ADDITIONS_PROSE_SCHEMA
+)}
+
+DATA:
+${promptData(context, "session_additions")}`;
 }
 
 // ---------- Stage 3: bounded agent composition (docs §5) ----------

@@ -28,6 +28,7 @@ import {
   buildPlanVerifyPrompt,
   buildProgramEvolutionPrompt,
   buildSessionPrompt,
+  buildSessionAdditionsPrompt,
   buildSessionVerifyPrompt,
   buildPlanDraftVerifyPrompt,
   buildWeekAheadPrompt,
@@ -109,6 +110,13 @@ const SITES = [
       "training_constraints",
     ],
     dropped: ["signal_state", "garmin", "day_read", "recent_decisions"],
+  },
+  {
+    site: "session_additions",
+    build: () =>
+      buildSessionAdditionsPrompt(repo.buildMidSessionSnapshot(), { constraints: "arms" }),
+    kept: ["profile", "training_constraints", "strength_schedule", "program_state", "acute_gates"],
+    dropped: ["recent_sessions", "plan", "recovery", "garmin", "day_read", "health", "meal_plan"],
   },
   {
     site: "daily_composition",

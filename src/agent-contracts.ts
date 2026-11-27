@@ -755,6 +755,55 @@ export const SESSION_SUGGESTION_SCHEMA: JsonSchema = {
   },
 };
 
+// ---------- mid-session exercise additions ("Ideas to add") ----------
+
+// Strength-only add-on suggestions for an in-progress session. Every field
+// normalizeSessionAdditionsResult reads is named explicitly so constrained
+// decoding never drops `fit`, `note`, or timed/load fields.
+const SESSION_ADDITION_ITEM_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["exercise", "sets", "fit"],
+  properties: {
+    exercise: { type: "string", minLength: 1 },
+    mode: { type: ["string", "null"], enum: ["reps", "timed", null] },
+    sets: { type: "integer", exclusiveMinimum: 0 },
+    rep_low: { type: ["integer", "null"], exclusiveMinimum: 0 },
+    rep_high: { type: ["integer", "null"], exclusiveMinimum: 0 },
+    target_reps: { type: ["integer", "null"], exclusiveMinimum: 0 },
+    // Negative = assisted, null = bodyweight OR an unanchored load. Never a `minimum`.
+    target_weight: { type: ["number", "null"] },
+    target_seconds: { type: ["number", "null"], exclusiveMinimum: 0 },
+    fit: { type: "string", minLength: 1 },
+    note: { type: ["string", "null"] },
+  },
+};
+
+export const SESSION_ADDITIONS_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["why", "suggestions"],
+  properties: {
+    why: { type: "string", minLength: 1 },
+    suggestions: {
+      type: "array",
+      minItems: 1,
+      maxItems: 5,
+      items: SESSION_ADDITION_ITEM_SCHEMA,
+    },
+  },
+};
+
+export function isSessionAdditionsResult(value: unknown): boolean {
+  if (!matchesJsonSchema(SESSION_ADDITIONS_SCHEMA, value, { coerce: true })) return false;
+  const obj = object(value);
+  if (!obj || !text(obj.why) || !Array.isArray(obj.suggestions) || !obj.suggestions.length) return false;
+  return obj.suggestions.every((raw: unknown) => {
+    const item = object(raw);
+    return !!item && text(item.exercise) && text(item.fit) && positive(item.sets);
+  });
+}
+
 // ---------- adaptive nutrition check-in ----------
 
 // Runs through bounded reads (runChosenStreaming boundedReads:true), so it names the

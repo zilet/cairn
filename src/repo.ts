@@ -12,6 +12,7 @@ export * from "./repo/training-read.js";
 export * from "./repo/sessions.js";
 export * from "./repo/session-dose-log.js"; // a completed log outranks a felt low-performance rating
 export * from "./repo/adaptive-session.js";
+export * from "./repo/session-additions.js";
 export * from "./repo/profile.js";
 export * from "./repo/strength-schedule.js"; // the lifting week: stated, else a 3-of-6-weeks pattern read off the log
 export * from "./repo/movement-considerations.js"; // stated lasting, painless conditions — prompt context, never a gate

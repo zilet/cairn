@@ -71,7 +71,14 @@
     return true;
   }
 
-  const CAIRN_TODAY_SESSION_ASK_SHEET = { open: openAskSheet };
+  function wireIdeateButton(root: ParentNode | null | undefined, openIdeate: () => void): void {
+    const btn = root?.querySelector?.<HTMLElement>("#ideateExBtn");
+    if (!btn || btn.dataset.ideateWired === "1") return;
+    btn.dataset.ideateWired = "1";
+    btn.addEventListener("click", openIdeate);
+  }
+
+  const CAIRN_TODAY_SESSION_ASK_SHEET = { open: openAskSheet, wireIdeateButton };
 
   Object.assign(globalThis, { CairnTodaySessionAskSheet: CAIRN_TODAY_SESSION_ASK_SHEET });
   if (typeof window !== "undefined") {

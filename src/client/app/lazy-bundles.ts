@@ -52,6 +52,8 @@ type CairnLazyBundleName = ClientLazyBundleName;
     // Sign-in and the passkey ceremonies: a signed-out device (the eager 401 door,
     // token-sheet.ts) and Settings → Devices.
     "auth": "/js/bundle-16-auth.js",
+    // Mid-session "Ideas to add" sheet.
+    "session-ideate": "/js/bundle-23-session-ideate.js",
   };
 
   // A lazy bundle's OWN stylesheet (scripts/build-styles.mjs LAZY_STYLE_SHEETS): the last
@@ -67,6 +69,7 @@ type CairnLazyBundleName = ClientLazyBundleName;
     "ask": "/css/ask.css",
     "horizon": "/css/horizon.css",
     "welcome": "/css/welcome.css",
+    "session-ideate": "/css/session-ideate.css",
   };
 
   // What else a bundle calls into at render time. Health reuses the body-metrics
@@ -96,11 +99,12 @@ type CairnLazyBundleName = ClientLazyBundleName;
     "welcome": ["agent-login"],
     "agent-login": [],
     "auth": [],
+    "session-ideate": [],
   };
 
   // Warm order after first paint: the homes a tap away first, Settings last.
   // Today's own lower half leads: it is the home every open lands on.
-  const PREFETCH_ORDER: readonly CairnLazyBundleName[] = ["today-ahead", "fuel", "train", "ask", "horizon", "calendar", "me-health", "meals", "settings", "agent-login", "welcome"];
+  const PREFETCH_ORDER: readonly CairnLazyBundleName[] = ["today-ahead", "fuel", "session-ideate", "train", "ask", "horizon", "calendar", "me-health", "meals", "settings", "agent-login", "welcome"];
 
   const inflight = new Map<CairnLazyBundleName, Promise<void>>();
   const executed = new Set<CairnLazyBundleName>();

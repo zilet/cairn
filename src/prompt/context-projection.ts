@@ -542,6 +542,22 @@ export const PROMPT_CONTEXT_SITES = {
     sessions: SESSIONS_RECENT,
   },
 
+  // Mid-session exercise ideation ("Ideas to add"): the builder already injects the
+  // live mid-session snapshot (logged sets, remaining items, skips, safety exclusions,
+  // grounded candidate weights), so DATA stays lean for fast interactive turnaround.
+  session_additions: {
+    keys: [
+      ...PERSON,
+      "training_constraints",
+      "strength_schedule",
+      "endurance_goal",
+      "endurance_schedule",
+      "program_state",
+      "acute_gates",
+    ],
+    sessions: 0,
+  },
+
   // Bounded composition inside a decided envelope: the server has ALREADY chosen the
   // kind, the muscle allow/exclude lists, the caps and the candidate movements with
   // their progression actions. The only prose blocks are CONTEXT_GUARDRAILS,

@@ -1567,6 +1567,17 @@ export type ClientDailySessionPrepareResponse =
     }
   | ClientDailySessionError;
 
+export type ClientDailySessionItemsAppendResponse =
+  | {
+      ok: true;
+      daily_session: ClientDailySessionComposition;
+      session: ClientTrainingSession | null;
+      session_id: number;
+      added: ClientDailySessionItem[];
+      skipped_duplicates: string[];
+    }
+  | ClientDailySessionError;
+
 export interface ClientActivity {
   id: number;
   type?: string | null;
@@ -4128,6 +4139,43 @@ export type ClientSessionSuggestResponse =
     }
   | ClientAgentJobEnvelope;
 
+export interface ClientSessionAdditionItem {
+  exercise: string;
+  mode: "reps" | "timed";
+  sets: number;
+  rep_low: number | null;
+  rep_high: number | null;
+  target_weight: number | null;
+  target_seconds: number | null;
+  load_basis: "assisted" | "loaded" | "bodyweight" | "open";
+  input: unknown;
+  muscle_group: string | null;
+  fit: string;
+  note: string | null;
+  last_set: ClientLoggedSet | null;
+}
+
+export type ClientSessionAdditionsResponse =
+  | {
+      ok: true;
+      date: ISODateString | string;
+      why: string;
+      suggestions: ClientSessionAdditionItem[];
+      source: "agent" | "deterministic";
+      fallback?: string;
+      agent: string | null;
+      tried?: ClientAgentAttempt[] | null;
+      agent_status?: string;
+    }
+  | {
+      ok: false;
+      error?: string;
+      agent?: string | null;
+      tried?: ClientAgentAttempt[] | null;
+      agent_status?: string;
+    }
+  | ClientAgentJobEnvelope;
+
 export interface ClientAgentJobsResponse {
   ok: boolean;
   jobs: ClientAgentJob[];
@@ -4568,9 +4616,11 @@ export interface ClientApiResponses {
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/today-read/trade-rest": ClientRestTradeResponse;
   "/api/session-suggest": ClientSessionSuggestResponse;
+  "/api/session-additions": ClientSessionAdditionsResponse;
   "/api/daily-session": ClientDailySessionComposition | null;
   "/api/daily-session/preview": ClientDailySessionPreview | null;
   "/api/daily-session/prepare": ClientDailySessionPrepareResponse;
+  "/api/daily-session/items": ClientDailySessionItemsAppendResponse;
   "/api/daily-session/discard": ClientDailySessionDiscardResponse;
   "/api/daily-session/outcome": ClientDailySessionOutcomeRead | null;
   "/api/session-primer": ClientSessionPrimer | null;

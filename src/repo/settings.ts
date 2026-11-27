@@ -255,6 +255,7 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   // and the verify pass below reads the draft against the person's constraints.
   session_suggest: { model_class: "deep", reasoning: "low" },
   session_compose: { model_class: "deep", reasoning: "low" },
+  session_additions: { model_class: "fast", reasoning: "low" },
   meal_swap: { model_class: "deep", reasoning: "low" },
   recipe: { model_class: "deep", reasoning: "low" },
   onboard: { model_class: "deep", reasoning: "low" },

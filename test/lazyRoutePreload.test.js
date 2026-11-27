@@ -117,7 +117,12 @@ test("a preload names the exact url ensureBundle injects, and the worker precach
   // Sign-in (auth) is opened by a 401 or a Settings tap, never a route; the welcome by
   // the boot decision or a coach card. The AI sign-in panel (agent-login) IS preloaded:
   // Settings → Agents depends on it.
-  const ROUTELESS = new Set([LAZY_BUNDLE_SRC["today-ahead"], LAZY_BUNDLE_SRC.auth, LAZY_BUNDLE_SRC.welcome]);
+  const ROUTELESS = new Set([
+    LAZY_BUNDLE_SRC["today-ahead"],
+    LAZY_BUNDLE_SRC.auth,
+    LAZY_BUNDLE_SRC.welcome,
+    LAZY_BUNDLE_SRC["session-ideate"],
+  ]);
   // …and each bundle's own stylesheet (LAZY_BUNDLE_CSS), preloaded as a style beside it.
   const { LAZY_BUNDLE_CSS } = lazyLoader();
   const bundles = Object.entries(LAZY_BUNDLE_SRC).filter(([, url]) => !ROUTELESS.has(url));

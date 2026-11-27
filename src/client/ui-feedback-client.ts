@@ -96,6 +96,7 @@ function loadingState(label: unknown): string {
 // lines, written twice — are now one. Add a script HERE and pass its key.
 const THINKING_SCRIPTS: Record<string, string[]> = {
   session_suggest: ["Reading your week…", "Weighing recovery…", "Shaping today's session…", "Choosing the right load…"],
+  session_additions: ["Reading what you've lifted…", "Checking what's fresh…", "Finding movements that fit…", "Dialing in sets and load…"],
   proposal: ["Reading your training…", "Weighing your recent sessions…", "Drafting next week's targets…", "Keeping the progression honest…"],
   compose_week: ["Reading where you're starting…", "Placing the hard days apart…", "Shaping your first week…", "Keeping the first dose honest…"],
   evolve_program: ["Reading how your lifts are trending…", "Spotting what's stalled…", "Drafting how your plan should evolve…", "Checking it against your constraints…"],

@@ -117,6 +117,8 @@ export const LAZY_STYLE_SHEETS = {
   horizon: { partials: ["horizon/horizon", "horizon/week", "horizon/landing", "horizon/journey", "horizon/behind"] },
   // The first-run welcome stage.
   welcome: { partials: ["welcome/welcome"] },
+  // Mid-session "Ideas to add" sheet.
+  "session-ideate": { partials: ["session/ideate"] },
 };
 
 /** Every partial, eager and lazy, in cascade order. */

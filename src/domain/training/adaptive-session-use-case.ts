@@ -1,8 +1,12 @@
 import {
+  appendDailySessionItems,
+  type AppendDailySessionItemsInput,
   DAILY_SESSION_NO_TEMPLATE,
   DailySessionError,
   discardDailySession,
   prepareDailySession,
+  removeAddedDailySessionItem,
+  type RemoveAddedDailySessionItemInput,
   type DiscardDailySessionInput,
   previewAdaptiveDailySession,
   type PrepareDailySessionInput,
@@ -63,6 +67,30 @@ export function previewAdaptiveDailySessionUseCase(
  */
 export function discardDailySessionUseCase(input: DiscardDailySessionInput = {}) {
   return discardDailySession(input);
+}
+
+/**
+ * Append one or more strength items onto today's active daily session without mutating
+ * the weekly plan, returning the updated composition and hydrated workout session.
+ */
+export function appendDailySessionItemsUseCase(input: AppendDailySessionItemsInput) {
+  const appended = appendDailySessionItems(input);
+  const session = getSessionDetail(Number(appended.session_id));
+  if (!session) throw new DailySessionError("daily_session_session_missing", "prepared workout session was not found");
+  const { session_id: _sessionId, ...result } = appended;
+  return { ...result, session };
+}
+
+/**
+ * Remove a mid-session added exercise from today's active composition (only if it has
+ * zero logged sets), returning the updated composition and hydrated session.
+ */
+export function removeAddedDailySessionItemUseCase(input: RemoveAddedDailySessionItemInput) {
+  const removed = removeAddedDailySessionItem(input);
+  const session = getSessionDetail(Number(removed.session_id));
+  if (!session) throw new DailySessionError("daily_session_session_missing", "prepared workout session was not found");
+  const { session_id: _sessionId, ...result } = removed;
+  return { ...result, session };
 }
 
 /**

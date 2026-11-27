@@ -128,6 +128,7 @@ test("every lazy bundle maps to its own precached url", () => {
     welcome: "/js/bundle-15-welcome.js",
     "agent-login": "/js/bundle-17-agent-login.js",
     auth: "/js/bundle-16-auth.js",
+    "session-ideate": "/js/bundle-23-session-ideate.js",
   });
 });
 
@@ -452,6 +453,7 @@ test("the idle warm-up executes every lazy bundle one at a time, once", async ()
     "glance",
     "today-ahead",
     "fuel",
+    "session-ideate",
     "day-view",
     "journey",
     "body",
@@ -465,7 +467,7 @@ test("the idle warm-up executes every lazy bundle one at a time, once", async ()
     "settings",
     "welcome",
   ]);
-  assert.equal(env.scripts.length, 15, "one tag per bundle");
+  assert.equal(env.scripts.length, 16, "one tag per bundle");
 });
 
 test("the idle warm-up stands down on Save-Data", () => {

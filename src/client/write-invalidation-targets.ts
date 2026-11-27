@@ -104,6 +104,8 @@ type WriteInvalidationTargetsApi = {
     // POST /sessions/:id/finish.
     // The caller keeps the session key it just primed from the finish response.
     session_finish: t(DAY, TRAINING, ["today:daily-session:"]),
+    // POST /daily-session/items (mid-session add).
+    session_add_items: t(DAY, ["today:session:", "today:daily-session:", "today:open:"]),
     // Applying a drafted proposal (Coach list, a chat draft card).
     proposal_apply: t(DAY, PLAN),
     // A meal plan edit / swap / status change.

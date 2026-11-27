@@ -11,6 +11,7 @@ import * as repo from "./repo.js";
 import {
   suggestSession,
   composeDailySession,
+  suggestSessionAdditions,
   draftCoachProposal,
   evolveProgram,
   composeWeek,
@@ -100,6 +101,7 @@ export const STREAM_DELTA_KINDS = new Set([
   "health_synthesis",
   "session_suggest",
   "session_compose",
+  "session_additions",
   "nutrition_checkin",
   "weekly_read",
 ]);
@@ -519,6 +521,20 @@ async function processAgentJob(id: number): Promise<void> {
             equipment: input.equipment != null ? String(input.equipment) : undefined,
             override: input.override != null ? String(input.override) : undefined,
             train_anyway: input.train_anyway === true,
+          },
+          hooks
+        );
+        chosen = result?.agent ?? null;
+        break;
+      }
+      case "session_additions": {
+        result = await suggestSessionAdditions(
+          agent,
+          {
+            date: input.date != null ? String(input.date) : undefined,
+            focus: input.focus != null ? String(input.focus) : undefined,
+            constraints: input.constraints != null ? String(input.constraints) : undefined,
+            exclude: Array.isArray(input.exclude) ? input.exclude.map(String) : undefined,
           },
           hooks
         );

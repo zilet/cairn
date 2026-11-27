@@ -1,6 +1,7 @@
 export const AGENT_JOB_KINDS = [
   "session_suggest",
   "session_compose",
+  "session_additions",
   "proposal",
   "evolve_program",
   "compose_week",

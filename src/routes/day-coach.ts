@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { enqueueAgentJob, ensureWeekAheadJob } from "../agentJobs.js";
-import { composeDailySession, suggestSession, weekAheadServe, whatIfDo } from "../coachOps.js";
+import { composeDailySession, suggestSession, suggestSessionAdditions, weekAheadServe, whatIfDo } from "../coachOps.js";
 import { ensureDayReadRefresh } from "../dayread-refresh.js";
 import { readToday, tradeRestDay } from "../domain/brain/index.js";
 import { createAgentJob } from "../domain/person/index.js";
 import {
+  appendDailySessionItemsUseCase,
   dailySessionErrorBody,
   discardDailySessionUseCase,
   isDailySessionAbsence,
@@ -187,6 +188,36 @@ dayCoachRouter.post("/session-compose", async (req, res, next) => {
   }
 });
 
+// Mid-session exercise ideation ("Ideas to add"): fast, grounded in what is already
+// logged today, remaining card items, skips, injuries, and tomorrow's run/lift.
+// Preview-only; the athlete picks individual items to append via POST /daily-session/items.
+dayCoachRouter.post("/session-additions", async (req, res, next) => {
+  const b = req.body ?? {};
+  const exclude = Array.isArray(b.exclude)
+    ? b.exclude.map((entry: unknown) => String(entry ?? "").trim()).filter(Boolean).slice(0, 24)
+    : undefined;
+  const input = {
+    agent: b.agent ?? null,
+    focus: b.focus != null ? String(b.focus) : undefined,
+    constraints: b.constraints != null ? String(b.constraints) : undefined,
+    exclude,
+    date: b.date != null ? String(b.date) : localDateISO(),
+  };
+  if (backgroundOp(res, "session_additions", input, b.agent)) return;
+  try {
+    res.json(
+      await suggestSessionAdditions(b.agent, {
+        date: input.date,
+        focus: input.focus,
+        constraints: input.constraints,
+        exclude: input.exclude,
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
 // Read the durable composition the athlete accepted for a day. Agent suggestions
 // remain preview-only until the explicit prepare call below writes this snapshot.
 dayCoachRouter.get("/daily-session", (req, res) => {
@@ -296,6 +327,24 @@ dayCoachRouter.post("/daily-session/prepare", (req, res) => {
     // against are all the same answer — "your copy is stale, re-read and retry" — so
     // they share one CONFLICT status instead of some of them reading as malformed
     // input. 400 stays for a genuinely bad request body.
+    res.status(isDailySessionConflict(error) ? 409 : 400).json(dailySessionErrorBody(error));
+  }
+});
+
+// Append one or more strength items onto today's active daily session without
+// replacing it or mutating the weekly plan. Works on already-started sessions.
+dayCoachRouter.post("/daily-session/items", (req, res) => {
+  const body = req.body ?? {};
+  try {
+    res.json(
+      appendDailySessionItemsUseCase({
+        date: body.date,
+        items: body.items,
+        origin: body.origin,
+        source_job_id: body.source_job_id,
+      })
+    );
+  } catch (error: any) {
     res.status(isDailySessionConflict(error) ? 409 : 400).json(dailySessionErrorBody(error));
   }
 });

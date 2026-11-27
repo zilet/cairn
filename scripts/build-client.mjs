@@ -144,6 +144,9 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-session-suggest-client.ts", output: "public/js/today-session-suggest-client.js" },
   { source: "src/client/today-session-suggest-controller.ts", output: "public/js/today-session-suggest-controller.js" },
   { source: "src/client/today-session-ask-sheet.ts", output: "public/js/today-session-ask-sheet.js" },
+  { source: "src/client/session-additions-model.ts", output: "public/js/session-additions-model.js" },
+  { source: "src/client/session-additions-client.ts", output: "public/js/session-additions-client.js" },
+  { source: "src/client/session-additions-controller.ts", output: "public/js/session-additions-controller.js" },
   { source: "src/client/today-session-status-client.ts", output: "public/js/today-session-status-client.js" },
   { source: "src/client/today-session-feedback-client.ts", output: "public/js/today-session-feedback-client.js" },
   { source: "src/client/session-primer-client.ts", output: "public/js/session-primer-client.js" },
@@ -1197,6 +1200,20 @@ export const BUNDLES = [
       "public/js/auth-passkey-client.js",
       "public/js/auth-offer-client.js",
       "public/js/auth-signin-client.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-23-session-ideate.js",
+    label: "Mid-session exercise ideation sheet",
+    // LAZY: opened by tapping "Ideas to add" inside an active strength session,
+    // warmed on idle after first paint, and precached for offline gym use.
+    lazy: "session-ideate",
+    views: [],
+    routeless: true,
+    inputs: [
+      "public/js/session-additions-model.js",
+      "public/js/session-additions-client.js",
+      "public/js/session-additions-controller.js",
     ],
   },
 ];

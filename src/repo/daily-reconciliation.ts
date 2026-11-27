@@ -226,6 +226,7 @@ export interface MovementDoseEvidence {
   // are null and it is never comparable (`unit_substitute`).
   substituted_by?: string;
   unit_key?: string;
+  added_mid_session?: boolean;
 }
 
 /** The per-dose reason a slot another variant of its unit satisfied is not load evidence. */
@@ -1020,7 +1021,20 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     .map(([, value]) => value.exercise);
   const skippedSuggested = cardUntouched
     ? []
-    : suggestedExercises.filter((ex) => !achievedMap.has(identityOf(ex)) && !substituteForSlot.has(identityOf(ex)));
+    : items
+        .filter(
+          (it: any) =>
+            it.added_mid_session !== true &&
+            !achievedMap.has(identityOf(it.exercise)) &&
+            !substituteForSlot.has(identityOf(it.exercise))
+        )
+        .map((it: any) => String(it.exercise));
+  const coreSuggestedCount = items.filter(
+    (it: any) =>
+      it.added_mid_session !== true ||
+      achievedMap.has(identityOf(it.exercise)) ||
+      substituteForSlot.has(identityOf(it.exercise))
+  ).length;
   const skipped = Array.from(
     new Set([
       ...skippedSuggested,
@@ -1116,6 +1130,7 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
         (!!session.joint_pain && painAreaLoadsExercise(String(session.joint_pain), exercise)) ||
         symptomEvents.some(symptomGatesComparability),
       symptom_event_ids: symptomEvents.map((event) => event.id),
+      ...(it.added_mid_session === true ? { added_mid_session: true } : {}),
     };
   });
 
@@ -1190,13 +1205,13 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   } else if (substituted.length && !completed.length) {
     reason_codes.push("substituted_movements");
   } else {
-    if (completed.length >= suggestedExercises.length && suggestedExercises.length > 0 && !substituted.length) {
+    if (completed.length >= coreSuggestedCount && coreSuggestedCount > 0 && !substituted.length) {
       reason_codes.push("completed_as_suggested");
     } else if (skipped.length) {
       reason_codes.push("partial_session");
     }
     if (substituted.length) reason_codes.push("substituted_movements");
-    if (!skipped.length && substituted.length && completed.length >= suggestedExercises.length) {
+    if (!skipped.length && substituted.length && completed.length >= coreSuggestedCount) {
       reason_codes.push("extended_session");
     }
   }

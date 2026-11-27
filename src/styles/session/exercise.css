@@ -169,7 +169,9 @@
 
 /* add off-plan exercise */
 .addex{margin:var(--space-2) 0 var(--space-7)}
-.addex-btn{width:100%;text-align:center}
+.addex-actions{display:flex;gap:var(--space-4)}
+.addex-actions:has(#addExBtn[hidden]){display:none}
+.addex-btn,.addex-ideate{flex:1;min-width:0;text-align:center}
 .addex-form[hidden]{display:none}
 .addex-row{display:flex;gap:var(--space-4);align-items:center}
 .addex-row input{

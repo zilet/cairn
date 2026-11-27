@@ -47,9 +47,14 @@ import {
 import type { AgentPriority, FallbackResult } from "../agents.js";
 import { runChosen, runChosenStreaming } from "../runChosen.js";
 import { createStreamedArrayReader } from "../streamedJsonArray.js";
-import { buildCoachPrompt, buildProgramEvolutionPrompt, buildWeekComposePrompt, buildSessionPrompt, buildDailyCompositionPrompt, buildExerciseExplanationPrompt, buildWeekAheadPrompt, buildSessionVerifyPrompt, buildPlanDraftVerifyPrompt, buildExerciseReconcilePrompt } from "../prompt.js";
+import { buildCoachPrompt, buildProgramEvolutionPrompt, buildWeekComposePrompt, buildSessionPrompt, buildSessionAdditionsPrompt, buildDailyCompositionPrompt, buildExerciseExplanationPrompt, buildWeekAheadPrompt, buildSessionVerifyPrompt, buildPlanDraftVerifyPrompt, buildExerciseReconcilePrompt } from "../prompt.js";
 import { applyProposalWithAutonomy } from "../domain/brain/autonomy-service.js";
-import { DAILY_SESSION_SUGGESTION_NORMALIZATION, EXERCISE_EXPLANATION_SCHEMA, EXERCISE_RECONCILE_SCHEMA, PLAN_PROPOSAL_SCHEMA, SESSION_SUGGESTION_SCHEMA, WEEK_AHEAD_SCHEMA, hasPlanProposalActions, isExerciseExplanationResult, isPlanProposalResult, isReconciliationResult, isSessionSuggestionResult, isWeekAheadResult, normalizeSessionSuggestionResult } from "../agent-contracts.js";
+import { DAILY_SESSION_SUGGESTION_NORMALIZATION, EXERCISE_EXPLANATION_SCHEMA, EXERCISE_RECONCILE_SCHEMA, PLAN_PROPOSAL_SCHEMA, SESSION_ADDITIONS_SCHEMA, SESSION_SUGGESTION_SCHEMA, WEEK_AHEAD_SCHEMA, hasPlanProposalActions, isExerciseExplanationResult, isPlanProposalResult, isReconciliationResult, isSessionSuggestionResult, isWeekAheadResult, normalizeSessionSuggestionResult } from "../agent-contracts.js";
+import {
+  buildMidSessionSnapshot,
+  deterministicSessionAdditions,
+  normalizeSessionAdditionsResult,
+} from "../repo/session-additions.js";
 import { agentFailure, agentStatusFor, runVerify, type VerifyOutcome } from "./shared.js";
 import type { OpHooks } from "./shared.js";
 
@@ -269,6 +274,80 @@ export async function composeDailySession(
     tried,
     agent_status: "ok" as const,
     session_normalization: DAILY_SESSION_SUGGESTION_NORMALIZATION,
+  };
+}
+
+// Fast mid-session exercise ideation ("Ideas to add"). Grounded in what the athlete
+// has already logged today, what remains on the card, active exclusions/injuries, and
+// tomorrow's run/lift. Single fast turn (no second verify LLM pass); deterministic
+// safety checks normalize every item and guarantee a usable fallback if no agent answers.
+export async function suggestSessionAdditions(
+  agent: string | undefined,
+  opts: { date?: string; focus?: string; constraints?: string; exclude?: string[] } = {},
+  hooks?: OpHooks
+) {
+  hooks?.onPhase?.("reading what you've lifted so far");
+  const snapshot = buildMidSessionSnapshot(opts.date, {
+    focus: opts.focus,
+    constraints: opts.constraints,
+    exclude: opts.exclude,
+  });
+  hooks?.onPhase?.("finding exercises that fit");
+  const prompt = buildSessionAdditionsPrompt(snapshot, {
+    focus: opts.focus,
+    constraints: opts.constraints,
+  });
+
+  let run: FallbackResult | null = null;
+  let triedFromFailure: { agent: string; error: string }[] = [];
+  try {
+    run = await runChosenStreaming(agent, prompt, {
+      op: "session_additions",
+      timeoutMs: interactiveTimeoutForOp("session_additions"),
+      signal: hooks?.signal,
+      onDelta: hooks?.onDelta,
+      boundedReads: false,
+      acceptParsed: (v: unknown) => normalizeSessionAdditionsResult(v, snapshot) != null,
+      schema: SESSION_ADDITIONS_SCHEMA,
+    });
+  } catch (error) {
+    triedFromFailure = agentFailure(error, hooks).tried;
+    run = null;
+  }
+
+  const chosenFromRun = run?.agent ?? null;
+  const tried = run?.tried ?? triedFromFailure;
+  const normalized = run?.result?.parsed
+    ? normalizeSessionAdditionsResult(run.result.parsed, snapshot)
+    : null;
+
+  if (normalized) {
+    return {
+      ok: true as const,
+      date: snapshot.date,
+      why: normalized.why,
+      suggestions: normalized.suggestions,
+      source: "agent" as const,
+      agent: chosenFromRun,
+      tried,
+      agent_status: "ok" as const,
+    };
+  }
+
+  const fallbackPayload = deterministicSessionAdditions(snapshot, {
+    focus: opts.focus,
+    constraints: opts.constraints,
+  });
+  return {
+    ok: true as const,
+    date: snapshot.date,
+    why: fallbackPayload.why,
+    suggestions: fallbackPayload.suggestions,
+    source: "deterministic" as const,
+    fallback: run ? "unusable_agent_output" : "agent_unavailable",
+    agent: chosenFromRun ?? "deterministic",
+    tried,
+    agent_status: "ok" as const,
   };
 }
 

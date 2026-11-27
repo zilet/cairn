@@ -2493,7 +2493,7 @@ declare global {
   declare function primeArtManifest(): Promise<void>;
   declare function jobReconnect(opts?: { reuseWithinMs?: number }): Promise<void>;
   /** Names of the bundles index.html does NOT load eagerly (see build-client's BUNDLES). */
-  declare type ClientLazyBundleName = "me-health" | "train" | "horizon" | "ask" | "settings" | "glance" | "day-view" | "calendar" | "journey" | "body" | "meals" | "fuel" | "today-ahead" | "welcome" | "agent-login" | "auth";
+  declare type ClientLazyBundleName = "me-health" | "train" | "horizon" | "ask" | "settings" | "glance" | "day-view" | "calendar" | "journey" | "body" | "meals" | "fuel" | "today-ahead" | "welcome" | "agent-login" | "auth" | "session-ideate";
   /** Inject a lazily-loaded app-shell bundle (and its dependencies) once; resolves after they have executed. */
   declare function ensureBundle(name: ClientLazyBundleName): Promise<void>;
   declare function bundleLoaded(name: ClientLazyBundleName): boolean;
@@ -4812,7 +4812,28 @@ declare global {
     /** The Brief's v2 voice pieces (today-brief-voice-client.ts); absent under a partial boot. */
     CairnTodayBriefVoice?: TodayBriefVoiceApi;
     CairnTodayBriefRunLeg?: { html(read: unknown, isToday: boolean): string };
-    CairnTodaySessionAskSheet?: { open(reveal: () => void): boolean };
+    CairnTodaySessionAskSheet?: {
+      open(reveal: () => void): boolean;
+      wireIdeateButton?(root: ParentNode | null | undefined, openIdeate: () => void): void;
+    };
+    CairnSessionAdditionsModel: {
+      IDEATE_VIBES: readonly string[];
+      exerciseKey(raw: unknown): string;
+      collectCurrentExerciseKeys(root: ParentNode | null | undefined): Set<string>;
+      sessionContextSummary(root: ParentNode | null | undefined): string;
+      rxSummary(item: Record<string, unknown>, formatDur?: (seconds: number) => string): string;
+      prefillFromSuggestion(item: Record<string, unknown>): Record<string, unknown>;
+    };
+    CairnSessionAdditionsClient: {
+      sheetHtml(opts: { subtitle: string; vibes?: readonly string[]; activeSteer?: string }): string;
+      loadingHtml(): string;
+      rowHtml(item: Record<string, unknown>, index: number, addedKeys: Set<string>, formatDur?: (seconds: number) => string): string;
+      resultsHtml(opts: { why?: string; suggestions: Array<Record<string, unknown>>; addedKeys: Set<string>; formatDur?: (seconds: number) => string }): string;
+      failureHtml(): string;
+    };
+    CairnSessionAdditionsController: {
+      open(deps: Record<string, unknown>): void;
+    };
 
     CairnChangesLine: {
       model(read: Partial<import("./brain-changes.js").ClientBrainChanges> | null | undefined): ClientChangesLineModel | null;
@@ -6255,6 +6276,7 @@ declare global {
   declare const CairnTodaySessionFeedback: Window["CairnTodaySessionFeedback"];
   declare const CairnSessionPrimer: Window["CairnSessionPrimer"];
   declare const CairnTodaySessionSkip: Window["CairnTodaySessionSkip"];
+  declare const CairnTodaySessionAskSheet: Window["CairnTodaySessionAskSheet"];
   declare const CairnTodayOpenSession: Window["CairnTodayOpenSession"];
   declare const CairnTodaySessionSetModel: Window["CairnTodaySessionSetModel"];
   declare const CairnTodaySetNotes: Window["CairnTodaySetNotes"];
@@ -8080,4 +8102,7 @@ declare global {
   declare const CairnProgramWeekModel: Window["CairnProgramWeekModel"];
   declare const CairnProgramWeek: Window["CairnProgramWeek"];
   declare const CairnProgramWeekController: Window["CairnProgramWeekController"];
+  declare const CairnSessionAdditionsModel: Window["CairnSessionAdditionsModel"];
+  declare const CairnSessionAdditionsClient: Window["CairnSessionAdditionsClient"];
+  declare const CairnSessionAdditionsController: Window["CairnSessionAdditionsController"];
 }

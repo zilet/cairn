@@ -333,7 +333,7 @@ test("emitJobDelta → onJobEvent delivers delta events; unsubscribe stops them;
 });
 
 test("jobStreamsDeltas: only the prose-bearing kinds stream", () => {
-  for (const k of ["health_synthesis", "session_suggest", "session_compose", "nutrition_checkin", "weekly_read"]) {
+  for (const k of ["health_synthesis", "session_suggest", "session_compose", "session_additions", "nutrition_checkin", "weekly_read"]) {
     assert.ok(jobStreamsDeltas(k), `${k} streams prose`);
   }
   for (const k of [
@@ -349,7 +349,7 @@ test("jobStreamsDeltas: only the prose-bearing kinds stream", () => {
   ]) {
     assert.ok(!jobStreamsDeltas(k), `${k} does not stream`);
   }
-  assert.equal(STREAM_DELTA_KINDS.size, 5);
+  assert.equal(STREAM_DELTA_KINDS.size, 6);
 });
 
 // ---------------- the one-shot (non-streamed) path parses marker-aware too ----------------

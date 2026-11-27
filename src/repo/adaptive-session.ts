@@ -15,7 +15,7 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getAgentJob } from "./chat.js";
 import { isKnownBodyweightMovement, normalizedExerciseKey, resolveExerciseName } from "./exercise-canon.js";
 import { exerciseInputFor } from "./exercise-input.js";
-import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
+import { findExercise, findOrCreateExercise, getExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { getPlanDay } from "./plan.js";
 import { selectedPlanDayForDate } from "./plan-selection.js";
 import { getOrCreateSessionRow } from "./session-core.js";
@@ -532,7 +532,7 @@ export function safeAgentWeight(exercise: string, requested: unknown): number | 
   return Math.min(value, baseline + maxStep);
 }
 
-function safeAgentSeconds(exercise: string, requested: unknown): number | null {
+export function safeAgentSeconds(exercise: string, requested: unknown): number | null {
   const value = boundedNumber(requested, 1, 3600, true);
   if (value == null) return null;
   const recent = recentWorkingSeconds(exercise);
@@ -1889,4 +1889,205 @@ export function listDailySessionCompositions() {
   return (db.prepare(`SELECT * FROM daily_session_compositions ORDER BY date DESC, version DESC`).all() as any[]).map(
     hydrate
   );
+}
+
+export interface AppendDailySessionItemsInput {
+  date?: string;
+  items: unknown[];
+  origin?: "ideation_add" | "athlete_add";
+  source_job_id?: number | null;
+}
+
+export interface RemoveAddedDailySessionItemInput {
+  date?: string;
+  exercise: string;
+}
+
+function resolveCanonicalItemExercise(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const item = raw as Record<string, unknown>;
+  if (item.kind === "cardio") {
+    fail("daily_session_invalid", "only strength exercises can be added to a lifting session");
+  }
+  const typed = boundedText(item.exercise, 120);
+  if (!typed) return raw;
+  const existing = findExercise(typed);
+  if (existing?.name) return { ...item, exercise: String(existing.name) };
+  const resolved = resolveExerciseName(typed);
+  if (resolved.exercise_id != null) {
+    const row = getExercise(resolved.exercise_id);
+    if (row?.name) return { ...item, exercise: String(row.name) };
+  }
+  return { ...item, exercise: typed };
+}
+
+/**
+ * Append strength items onto the active daily session for `date` without replacing
+ * the session or mutating the weekly plan. Safe on already-started sessions.
+ * When `date` has no active composition yet, opens/adopts one first and appends
+ * onto it atomically inside one savepoint.
+ */
+export function appendDailySessionItems(input: AppendDailySessionItemsInput) {
+  const date = validateDate(input.date);
+  if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > 8) {
+    fail("daily_session_invalid", "items must contain between 1 and 8 exercises");
+  }
+  const origin: "ideation_add" | "athlete_add" =
+    input.origin === "ideation_add" ? "ideation_add" : "athlete_add";
+  const agentSource = origin === "ideation_add";
+  const rawJobId = input.source_job_id == null ? null : Number(input.source_job_id);
+  const sourceJobId = rawJobId != null && Number.isInteger(rawJobId) && rawJobId > 0 ? rawJobId : null;
+
+  const normalizedItems: Record<string, unknown>[] = input.items.map((raw, index) => {
+    const resolved = resolveCanonicalItemExercise(raw);
+    const normalized = normalizeItem(resolved, index, agentSource, !agentSource, false) as Record<string, unknown>;
+    if (normalized.kind === "cardio") {
+      fail("daily_session_invalid", "only strength exercises can be added to a lifting session");
+    }
+    return {
+      ...normalized,
+      added_mid_session: true,
+      added_origin: origin,
+      ...(sourceJobId != null ? { added_job_id: sourceJobId } : {}),
+    };
+  });
+
+  return withSqliteSavepoint("append_daily_session_items", () => {
+    let active = activeCompositionRow(date);
+    if (!active) {
+      prepareDailySession({
+        date,
+        source: "athlete_override",
+        session: OPEN_SESSION_PAYLOAD,
+        provenance: {
+          entry: origin === "ideation_add" ? "mid_session_ideation" : "mid_session_add",
+          ...(sourceJobId != null ? { agent_job_id: sourceJobId } : {}),
+        },
+      });
+      active = activeCompositionRow(date);
+      if (!active) fail("daily_session_missing", "failed to prepare an active daily session");
+    }
+
+    const parsedExisting = parseJson(active.items_json);
+    const existing: Record<string, unknown>[] = Array.isArray(parsedExisting)
+      ? parsedExisting.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+      : [];
+    const existingKeys = new Set(
+      existing
+        .map((item) => normalizedExerciseKey(String(item.exercise ?? "")))
+        .filter(Boolean)
+    );
+
+    const toAdd: Record<string, unknown>[] = [];
+    const skippedDuplicates: string[] = [];
+    for (const item of normalizedItems) {
+      const key = normalizedExerciseKey(String(item.exercise ?? ""));
+      if (!key || existingKeys.has(key)) {
+        skippedDuplicates.push(String(item.exercise ?? ""));
+        continue;
+      }
+      existingKeys.add(key);
+      toAdd.push({ ...item, position: existing.length + toAdd.length });
+    }
+
+    if (!toAdd.length) {
+      return {
+        ok: true as const,
+        daily_session: hydrate(active),
+        session_id: Number(active.session_id),
+        added: [] as Record<string, unknown>[],
+        skipped_duplicates: skippedDuplicates,
+      };
+    }
+
+    if (existing.length + toAdd.length > 24) {
+      fail("daily_session_invalid", "session may contain at most 24 items");
+    }
+
+    for (const item of toAdd) {
+      try {
+        findOrCreateExercise(
+          String(item.exercise),
+          undefined,
+          undefined,
+          typeof item.mode === "string" ? item.mode : undefined
+        );
+      } catch {
+        /* best-effort catalog persistence; the session item still lands */
+      }
+    }
+
+    const nextItems = [...existing, ...toAdd];
+    db.prepare(`UPDATE daily_session_compositions SET items_json = ? WHERE id = ?`).run(
+      JSON.stringify(nextItems),
+      active.id
+    );
+    const updatedRow = db.prepare(`SELECT * FROM daily_session_compositions WHERE id = ?`).get(active.id);
+    const hydrated = hydrate(updatedRow);
+    const hydratedItems = Array.isArray(hydrated?.items) ? hydrated.items : [];
+    const added = hydratedItems.slice(existing.length);
+
+    return {
+      ok: true as const,
+      daily_session: hydrated,
+      session_id: Number(active.session_id),
+      added,
+      skipped_duplicates: skippedDuplicates,
+    };
+  });
+}
+
+/**
+ * Remove a mid-session added item from the active daily session ONLY when it was
+ * added mid-session and has zero logged sets on the bound workout session.
+ */
+export function removeAddedDailySessionItem(input: RemoveAddedDailySessionItemInput) {
+  const date = validateDate(input.date);
+  const targetName = boundedText(input.exercise, 120);
+  const targetKey = targetName ? normalizedExerciseKey(targetName) : "";
+  if (!targetKey) fail("daily_session_invalid", "exercise is required");
+
+  return withSqliteSavepoint("remove_added_daily_session_item", () => {
+    const active = activeCompositionRow(date);
+    if (!active) {
+      const owner = dailySessionOwnerOf(null, sessionWithoutComposition(sessionRowsForDate(date)));
+      fail("daily_session_missing", owner ? OWNER_CHANGED_MESSAGE : DAY_FREE_MESSAGE, undefined, owner);
+    }
+    const parsedExisting = parseJson(active.items_json);
+    const existing: Record<string, unknown>[] = Array.isArray(parsedExisting)
+      ? parsedExisting.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+      : [];
+    const idx = existing.findIndex((item) => normalizedExerciseKey(String(item.exercise ?? "")) === targetKey);
+    if (idx < 0) fail("daily_session_invalid", `${targetName} is not on today's session`);
+    const found = existing[idx];
+    if (found.added_mid_session !== true) {
+      fail("daily_session_locked", "Only exercises added mid-session can be removed.", undefined, compositionOwner(date, active));
+    }
+    const logged = db
+      .prepare(
+        `SELECT ls.id, e.name AS exercise
+           FROM logged_sets ls LEFT JOIN exercises e ON e.id = ls.exercise_id
+          WHERE ls.session_id = ?`
+      )
+      .all(Number(active.session_id)) as Array<{ id: number; exercise: string | null }>;
+    if (logged.some((row) => normalizedExerciseKey(String(row.exercise ?? "")) === targetKey)) {
+      fail("daily_session_locked", STARTED_LOCK_MESSAGE, undefined, compositionOwner(date, active));
+    }
+
+    const remaining = existing
+      .filter((_, i) => i !== idx)
+      .map((item, position) => ({ ...item, position }));
+    db.prepare(`UPDATE daily_session_compositions SET items_json = ? WHERE id = ?`).run(
+      JSON.stringify(remaining),
+      active.id
+    );
+    const updatedRow = db.prepare(`SELECT * FROM daily_session_compositions WHERE id = ?`).get(active.id);
+    return {
+      ok: true as const,
+      date,
+      removed: String(found.exercise ?? targetName),
+      daily_session: hydrate(updatedRow),
+      session_id: Number(active.session_id),
+    };
+  });
 }

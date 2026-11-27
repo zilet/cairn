@@ -107,7 +107,30 @@ function makeTodayCompatibilityBridges(input: TodayCompatibilityBridgesInput): T
     },
 
     async setupAddExercise() {
-      await CairnTodayAddExerciseController.setupAddExercise(addExerciseDeps());
+      const addDeps = addExerciseDeps();
+      await CairnTodayAddExerciseController.setupAddExercise(addDeps);
+      if (typeof CairnTodaySessionAskSheet !== "undefined") {
+        CairnTodaySessionAskSheet.wireIdeateButton?.(addDeps.root, () => {
+          void withBundle("session-ideate", () => {
+            const suggest = sessionSuggestDeps();
+            const sess = sessionDeps();
+            CairnSessionAdditionsController.open({
+              root: addDeps.root,
+              state: addDeps.state,
+              api: suggest.api,
+              runOp: suggest.runOp,
+              exCard: addDeps.exCard,
+              wireGuides: addDeps.wireGuides,
+              wireLogRow: addDeps.wireLogRow,
+              wireSkips: addDeps.wireSkips,
+              invalidate: suggest.invalidate,
+              reducedMotion: suggest.reducedMotion,
+              toast: addDeps.toast,
+              fmtDur: sess.fmtDur,
+            });
+          });
+        });
+      }
     },
 
     async appendOffPlanCard(name: any, mode: any) {

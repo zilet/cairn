@@ -1134,7 +1134,7 @@ week lives in its own "Earlier meal plans" fold at the foot.
   (best duration instead of est-1RM). Timed sets never count toward tonnage.
 - Logging row swaps WT/REPS/RIR for one `.in-dur` input accepting `90`, `1:30`, or `2m`
   (`parseDur`), normalised back to `m:ss` after each log.
-- The "+ Add exercise" form carries a Reps/Timed `.addex-mode` toggle (`.modebtn`).
+- The "+ Add exercise" form carries a Reps/Timed `.addex-mode` toggle (`.modebtn`). Beside `+ Add exercise`, `.addex-actions` offers `Ideas to add` (`#ideateExBtn`), which lazy-loads `session-ideate` (`bundle-23-session-ideate.js` + `public/css/session-ideate.css`, `src/styles/session/ideate.css`) and opens a `CairnUiSheet` (`Add to this session`, Young Serif 400). It runs `session_additions` immediately, keeps an optional `.rail` of quick steering chips and an optional text steer input above `.ideate-slot`, and renders 3–4 individually pickable movements as a hairline `.ideate-list` with one-tap `+ Add` → `Added ✓` buttons.
 
 ## Today trajectory and bodyweight capture
 
