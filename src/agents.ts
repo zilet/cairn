@@ -1213,7 +1213,17 @@ export function parseModelsOutput(raw: string, format: AgentDef["models_format"]
   for (const lineRaw of (raw || "").split(/\r\n|\n|\r/)) {
     // Strip leading line-erase / cursor-column ANSI controls a spinner writes before
     // printing the first model on the same line, while still dropping ANSI-colored log lines.
-    let line = lineRaw.trim().replace(/^(?:\u001b\[[0-9;?]*[KG])+/g, "").trim();
+    let line = lineRaw.trim();
+    while (line.startsWith("\u001b[")) {
+      let i = 2;
+      while (i < line.length && /[0-9;?]/.test(line[i])) i++;
+      if (line[i] === "K" || line[i] === "G") {
+        line = line.slice(i + 1);
+      } else {
+        break;
+      }
+    }
+    line = line.trim();
     if (!line) continue;
     // Log noise, never a model: ANSI escapes, glog-style records, error/warning lines.
     if (line.includes("\u001b[")) continue;

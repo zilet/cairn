@@ -330,7 +330,7 @@ test("one group a calendar week: a second pass the same week changes nothing", (
 });
 
 test("settling: the next step waits until the last was trained twice, then comes on the next lift", () => {
-  base();
+  base({ chest: { extra: 0 } });
   const first = settleVolumeStep({ act: true });
   assert.equal(first.lift, "Barbell Bench Press");
   ageStep(first.proposal_id, 9); // last week's step; the bench was trained once since (day -5)
@@ -1179,10 +1179,10 @@ test("every phrasing keeps the reading grammar, in both registers, with the numb
 // ---- the group condition is read per movement unit (the capability read) -------------
 
 test("the set goes to a lift of the HOLDING movement: a climbing flat press needs nothing, the incline takes it", () => {
-  base();
+  base({ chest: { extra: 0 } });
   // The flat press now climbs: two heavier sessions at the same reps.
-  logLift("Barbell Bench Press", 3, 115, 4);
-  logLift("Barbell Bench Press", 2, 120, 4);
+  logLift("Barbell Bench Press", 3, 115, 3);
+  logLift("Barbell Bench Press", 2, 120, 3);
   const units = getProgramState(today()).capability.units;
   assert.equal(units.find((u) => u.key === "horizontal-push:flat")?.verdict, "climbing", "precondition");
   assert.equal(units.find((u) => u.key === "horizontal-push:incline")?.verdict, "holding", "precondition");
