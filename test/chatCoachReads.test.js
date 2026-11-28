@@ -18,7 +18,7 @@ import {
   runChatCompletion,
   runChatReadRound,
 } from "../dist/chatTurns.js";
-import "./_seed.js";
+import { repo } from "./_seed.js";
 
 const trainingRequest = (weeks = 6) => ({ tool: "read_training_window", args: { end_date: null, weeks } });
 const trainingResult = () => ({ tool: "read_training_window", data: { events: [] }, rows_returned: 0, truncated: false });
@@ -356,4 +356,32 @@ test("chat: pasted URLs are fetched once and injected so the CLI never curls", a
   assert.ok(prompts.some((p) => /LINKED PAGE/.test(p) && /Placebo-controlled zinc trial/.test(p)));
   assert.ok(events.some((e) => e.type === "progress" && /link you sent/i.test(e.text)));
   assert.match(out.raw, /Zinc trial/);
+});
+
+test("chat: streaming-capable fallback agent still streams live deltas when primary is one-shot and fails", async () => {
+  repo.setSettings({ disabled_agents: [], agent_order: ["stub"] });
+  const { events, off } = collectEvents(4242);
+  const oneShotCalls = [];
+  const streamCalls = [];
+  const out = await runChatCompletion(4242, turnFixture({ agent: "codex" }), [], new AbortController().signal, {
+    resolveReadTransport: () => ({ transport: "prompt_loop", spec: null }),
+    supportsStream: (name) => name === "stub",
+    runAgent: async (name) => {
+      oneShotCalls.push(name);
+      return { code: 1, raw: "", stderr: "codex failed", usage: {} };
+    },
+    runAgentStreaming: async (name, _prompt, opts) => {
+      streamCalls.push(name);
+      const raw = "===CAIRN_REPLY===\nStreaming fallback reply works.";
+      for (const piece of raw.match(/[\s\S]{1,7}/g) ?? [raw]) opts.onDelta?.(piece);
+      return { code: 0, raw, stderr: "", usage: {} };
+    },
+  });
+  off();
+  assert.deepEqual(oneShotCalls, ["codex"], "non-streaming primary runs one-shot");
+  assert.deepEqual(streamCalls, ["stub"], "streaming-capable fallback streams instead of blocking one-shot");
+  assert.equal(out.agent, "stub");
+  assert.equal(out.attempts.at(-1)?.streaming, true);
+  const deltaText = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
+  assert.equal(deltaText.trim(), "Streaming fallback reply works.");
 });

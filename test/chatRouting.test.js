@@ -373,3 +373,21 @@ test("a food log at a named place stays a food log; the single-profile path asks
   assert.equal(chatMessageWantsCurrentResearch("Log my dinner at a restaurant in Boston", { captured: true }), false);
   assert.ok(chatMessageWantsCurrentResearch(REAL_SPRING_HALF));
 });
+
+test("default chat lane reasoning never requests xhigh or max, and non-clinical deep turns stay at medium", () => {
+  for (const lane of ["capture", "coach", "deep"]) {
+    const bare = resolveChatProfile(lane, "claude", {});
+    assert.ok(!["xhigh", "max"].includes(bare.reasoning), `${lane} default must not request xhigh/max`);
+    for (const reason of CHAT_ROUTING_REASON_CODES) {
+      const resolved = resolveChatProfile(lane, "claude", {}, {}, [reason]);
+      assert.ok(!["xhigh", "max"].includes(resolved.reasoning), `${lane}/${reason} must not request xhigh/max`);
+    }
+  }
+  // Non-clinical deep turns stay snappy at medium; clinical/lab/medication deep turns keep high.
+  for (const reason of ["goal_identity", "plan_restructure", "current_research", "multi_constraint", "explicit_deep_request"]) {
+    assert.equal(resolveChatProfile("deep", "claude", {}, {}, [reason]).reasoning, "medium", `deep/${reason}`);
+  }
+  for (const reason of ["clinical_or_injury", "lab_or_imaging", "medication_interaction"]) {
+    assert.equal(resolveChatProfile("deep", "claude", {}, {}, [reason]).reasoning, "high", `deep/${reason}`);
+  }
+});

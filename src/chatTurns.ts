@@ -174,7 +174,6 @@ import {
   chatWebProviderOrder,
   chatWebTurnTimeoutMs,
   cleanCliLine,
-  orderChatProvidersByAvailability,
   resolveRuntimeChatProfile,
   type RuntimeChatProfile,
 } from "./chat-routing-runtime.js";
@@ -1802,13 +1801,15 @@ function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: str
   return note;
 }
 
-// Produce the raw assistant text for a turn, streaming when possible.
+// Produce the raw assistant text for a turn, streaming whenever the chosen agent
+// supports it.
 //
-// The first agent in the (explicit or rotation) order STREAMS if it's capable
-// (claude/grok) — emitting live `delta` events, sentinel-aware so the trailing
-// actions JSON never reaches the bubble. Any failure (or a non-streaming first
-// agent) falls back to a one-shot rotation. Chat's success criterion is NON-EMPTY
-// TEXT — not parseable JSON — so it deliberately does NOT reuse the JSON-centric
+// Any agent in the (explicit or rotation) order STREAMS if it is capable
+// (claude/antigravity/grok) — emitting live `delta` events, sentinel-aware so the
+// trailing actions JSON never reaches the bubble. Non-streaming agents (codex) run
+// one-shot; if a primary agent fails, a streaming-capable fallback still streams
+// instead of blocking one-shot. Chat's success criterion is NON-EMPTY TEXT — not
+// parseable JSON — so it deliberately does NOT reuse the JSON-centric
 // runAgentWithFallback (a pure-prose reply has no JSON and would be judged a
 // failure there). Returns { agent, raw }; throws on abort or all-agents-failed.
 const EMPTY_CHAT_RETRY_SUFFIX =
@@ -2337,7 +2338,11 @@ export async function runChatCompletion(
   const executeCoachRead = deps.executeCoachRead ?? executeCoachReadTool;
   const fetchLinkedPages = deps.fetchLinkedPages ?? fetchChatLinkedPages;
   const startReadListener = deps.startReadListener ?? startCoachReadMcpListener;
-  const resolveReadTransport = deps.resolveReadTransport ?? ((name: string) => resolveCoachReadTransport(name));
+  const definitions = loadAgents();
+  // Pass the already-loaded agents table so transport resolution never re-reads
+  // agents.json from disk for every provider/attempt in the hot path.
+  const resolveReadTransport =
+    deps.resolveReadTransport ?? ((name: string) => resolveCoachReadTransport(name, definitions));
   const readRunId = crypto.randomUUID();
   const readState = newChatReadState();
   let readExhausted = false;
@@ -2346,7 +2351,6 @@ export async function runChatCompletion(
   // agent first; runtime failure still falls through to the other usable auto
   // providers without weakening the selected lane.
   const chosen = repo.resolveAgentForTask("chat", turn.agent);
-  const definitions = loadAgents();
   const attempts: ChatAgentAttempt[] = [];
   let decision: ChatRoutingDecision | null = turn.routing ?? null;
   // ---------- the web ----------
@@ -2373,11 +2377,13 @@ export async function runChatCompletion(
   // swaps in its own policy ("coach_reads") for that attempt only.
   const isWebAgent = (name: string): boolean => definitions[name]?.web_access === true;
   const toolsFor = (name: string): "none" | "web" => (webTurn && isWebAgent(name) ? "web" : "none");
+  // Read settings once for the whole turn (class order, context mode, profile bindings).
+  const chatSettings = repo.getSettings();
   // The person's class order (settings.agent_class_order) for the lane's class: capture
   // and coach are everyday (fast), deep is deep; the legacy single path reads fast. It is
   // read for the lane the turn STARTS on — an escalation keeps the order it began with.
   const laneClass = decision ? CHAT_LANE_MODEL_CLASS[decision.lane] : "fast";
-  const classFirst = repo.getSettings().agent_class_order[laneClass];
+  const classFirst = chatSettings.agent_class_order[laneClass];
   const selectedFirst = Boolean(turn.agent && turn.agent !== "auto");
   const baseOrder = buildChatProviderOrder(chosen, repo.pickAgentOrder(), {
     classFirst,
@@ -2392,10 +2398,16 @@ export async function runChatCompletion(
   // until its hold lapses (src/agentAvailability.ts splitHeldProviders, the rule the
   // job rotation shares): never spawned, and past `hold_until` the next turn probes
   // it again. With EVERY provider held the turn fails fast with the calm reply below
-  // instead of spawning each one to hear the same refusal.
-  const { open: openOrder, held } = splitHeldProviders(orderChatProvidersByAvailability(baseOrder), (name) =>
-    repo.getAgentAvailability(name)
-  );
+  // instead of spawning each one to hear the same refusal. splitHeldProviders already
+  // preserves the relative order of open providers, so one availability lookup per
+  // provider is enough.
+  const { open: openOrder, held } = splitHeldProviders(baseOrder, (name) => {
+    try {
+      return repo.getAgentAvailability(name);
+    } catch {
+      return null;
+    }
+  });
   if (!openOrder.length && held.length) {
     throw new ChatCompletionError(
       held.map(({ agent, hold }) => ({
@@ -2416,7 +2428,6 @@ export async function runChatCompletion(
   // The action types the prompt offers: those whose server gate holds for this turn's
   // message — the same gates, from the same inputs, applyChatActions reads after the reply.
   const promptActionTypes = chatPromptActionTypes(chatActionGates(chatTurnGateInputs(turn)));
-  const chatSettings = repo.getSettings();
   // The coach/deep lanes' DATA block (settings.chat_context): the lean core whose
   // contract says to LOOK THINGS UP, or the whole snapshot with the original wording.
   // The capture lane keeps its own narrow slice and the original read contract.
@@ -2743,239 +2754,237 @@ export async function runChatCompletion(
     const promptFor = (transport: ResolvedCoachReadTransport, name: string): string =>
       composeChatAttemptPrompt(promptPartsFor(webModeFor(name)), transport.transport === "native_mcp", readSuffix(transport, lane));
 
-    // Streaming first, exactly once for an equivalent provider/profile tuple. The
-    // stream-capable primary may first request bounded reads (bare JSON, no reply marker
-    // → the gate shows nothing) across up to a few rounds, then stream the reply. Read
-    // follow-ups re-stream the SAME agent, so they are gated by `seen` only ONCE. A
-    // native-transport primary reads inside its one streamed run instead.
-    const first = order[0];
-    const firstProfile = profileFor(first);
-    noteUnsupportedProfile(first, firstProfile);
-    const firstKey = attemptKey(lane, first, firstProfile);
-    if (!seen.has(firstKey) && supportsStream(first)) {
-      seen.add(firstKey);
-      // Inner loop: re-run the SAME first agent for each read follow-up, then stream the reply.
-      while (true) {
-        const transport = transportFor(first, lane);
-        const streamPrompt = promptFor(transport, first);
-        lastPromptBytes = Buffer.byteLength(streamPrompt, "utf8");
-        const started = Date.now();
-        let ttft: number | null = null;
-        const stream = createChatStreamFilter((event) => {
-          if (event.type === "delta" && event.text && ttft == null) ttft = Date.now() - started;
-          emit(id, event);
-        });
-        streamFilters.set(id, stream);
-        const timeoutMs = timeoutFor(first, firstProfile);
-        const streamOnce = (extras: NativeLaunchExtras = {}) =>
-          runStreamingDep(first, streamPrompt, {
-            signal,
-            timeoutMs,
-            tools: extras.tools ?? toolsFor(first),
-            ...(extras.mcpConfigArgs ? { mcpConfigArgs: extras.mcpConfigArgs } : {}),
-            ...(extras.onPermit ? { onPermit: extras.onPermit } : {}),
-            // The athlete is watching this stream: it takes the spawn cap's reserved
-            // interactive permit rather than queueing behind batch lanes.
-            priority: "interactive",
-            op: lane ? `chat:${lane}` : "chat",
-            ...(firstProfile.execution ?? {}),
-            onProgress: stream.progress,
-            onDelta: stream.push,
-          });
-        let nativeCallCount = 0;
-        try {
-          let res: AgentResult;
-          if (transport.transport === "native_mcp") {
-            const native = await runNative(first, transport, timeoutMs, streamOnce);
-            noteNative(native.calls);
-            nativeCallCount = native.calls.length;
-            if (native.attachFailed) {
-              stream.reset();
-              const attempt = decorate(
-                {
-                  agent: first,
-                  ok: false,
-                  status: "read_attach_failed",
-                  error_class: "read_attach_failed",
-                  error_message: "Native coach reads did not attach; retrying on the prompt loop",
-                  exit_code: native.res?.code ?? null,
-                  failure_tail: native.res?.failure_tail ?? null,
-                  ...readTelemetry(transport, streamPrompt, nativeCallCount),
-                },
-                firstProfile,
-                true,
-                ttft
-              );
-              recordChatAttempt(attempt, started, false, false);
-              attempts.push(attempt);
-              nativeFallback.add(first);
-              readPhase("Reviewing your history…");
-              continue; // the SAME agent, once, over the prompt loop
-            }
-            if (native.error) throw native.error;
-            res = native.res as AgentResult;
-            if (!String(res.raw ?? "").trim() && res.code === 0 && !signal.aborted) {
-              // Connected, then answered nothing: the run's listener is closed, so it is
-              // retried the way an attach failure is — the SAME agent, once, on the prompt loop.
-              stream.reset();
-              const attempt = decorate(
-                {
-                  agent: first,
-                  ok: false,
-                  status: "empty_reply",
-                  error_class: "empty_reply",
-                  error_message: "Agent returned no reply",
-                  exit_code: res.code,
-                  ...readTelemetry(transport, streamPrompt, nativeCallCount),
-                },
-                firstProfile,
-                true,
-                ttft
-              );
-              recordChatAttempt(attempt, started, false, false);
-              attempts.push(attempt);
-              nativeFallback.add(first);
-              continue;
-            }
-          } else {
-            res = await streamOnce();
-          }
-          stream.finish();
-          const raw = String(res.raw ?? "");
-          if (lane && parseChatEscalationRequest(raw, lane)) {
-            const attempt = decorate(
-              {
-                agent: first,
-                ok: true,
-                status: "escalated",
-                exit_code: res.code,
-                model: res.usage?.model ?? null,
-                ...readTelemetry(transport, streamPrompt, nativeCallCount),
-              },
-              firstProfile,
-              true,
-              ttft
-            );
-            attempt.escalation_source = lane;
-            recordChatAttempt(attempt, started, true, false);
-            attempts.push(attempt);
-            escalate(raw, lane, stream);
-            continue laneLoop;
-          }
-          const readTurn = readTurnOf(raw, transport);
-          if (readTurn.kind === "query") {
-            const attempt = decorate(
-              {
-                agent: first,
-                ok: true,
-                status: "reading_data",
-                exit_code: res.code,
-                model: res.usage?.model ?? null,
-                ...readTelemetry(transport, streamPrompt, 0),
-              },
-              firstProfile,
-              true,
-              ttft
-            );
-            const callsBefore = readState.calls;
-            const outcome = await runChatReadRound(readState, readTurn.query, {
-              runId: readRunId,
-              signal,
-              execute: executeCoachRead,
-            });
-            attempt.read_calls = readState.calls - callsBefore;
-            recordChatAttempt(attempt, started, true, false);
-            attempts.push(attempt);
-            stream.reset(); // the protocol turn streamed nothing (no reply marker) — clear the bubble
-            readPhase("Reviewing your history…");
-            if (outcome === "stop") readExhausted = true;
-            continue; // re-stream the same agent with the verified results (or, if exhausted, plain)
-          }
-          if (readTurn.kind === "malformed") {
-            // A coach_read-shaped turn that failed normalization must never be accepted
-            // as the reply (raw protocol JSON would leak into the bubble). Drop the read
-            // contract and re-stream the SAME agent once for a plain reply. Bounded:
-            // readExhausted stops the next pass from detecting a read at all.
-            const attempt = decorate(
-              {
-                agent: first,
-                ok: true,
-                status: "read_malformed",
-                exit_code: res.code,
-                model: res.usage?.model ?? null,
-                ...readTelemetry(transport, streamPrompt, 0),
-              },
-              firstProfile,
-              true,
-              ttft
-            );
-            recordChatAttempt(attempt, started, true, false);
-            attempts.push(attempt);
-            stream.reset(); // the malformed protocol JSON never earns the bubble
-            readExhausted = true;
-            readPhase("Reviewing your history…");
-            continue;
-          }
-          const classified = classifyChatAgentResult(first, res);
-          const webAsk = classified ? null : webEscalationFor(raw);
-          const attempt = decorate(
-            {
-              ...(classified ?? {
-                agent: first,
-                ok: true,
-                status: webAsk ? "web_escalated" : "ok",
-                exit_code: res.code,
-                model: res.usage?.model ?? null,
-                input_tokens: res.usage?.input_tokens ?? null,
-                output_tokens: res.usage?.output_tokens ?? null,
-              }),
-              ...readTelemetry(transport, streamPrompt, nativeCallCount),
-            },
-            firstProfile,
-            true,
-            ttft
-          );
-          recordChatAttempt(attempt, started, !classified, false);
-          attempts.push(attempt);
-          if (webAsk) {
-            stream.reset(); // a from-memory answer (or the bare request) never stays in the bubble
-            beginWebEscalation(webAsk);
-            continue laneLoop;
-          }
-          if (!classified)
-            return { agent: first, raw, attempts, datedWeek: turnWeek, reads: turnReads(transport), promptBytes: lastPromptBytes, web: webOutcome(first) };
-        } catch (e: any) {
-          if (signal.aborted) throw e;
-          const attempt = decorate(
-            { ...classifyChatException(first, e), ...readTelemetry(transport, streamPrompt, nativeCallCount) },
-            firstProfile,
-            true,
-            ttft
-          );
-          attempts.push(attempt);
-          try {
-            stopIfBusy(e, attempt);
-          } finally {
-            recordChatAttempt(attempt, started, false, false);
-          }
-          lastErr = e;
-        }
-        stream.reset();
-        stream.progress("Trying another route…");
-        break; // streaming produced no reply → fall to the rotation
-      }
-    }
-
-    for (const name of order) {
+    // Walk the ordered providers, streaming ANY provider that supports it (claude,
+    // antigravity, grok — not just order[0]) so a fallback after codex or a failed
+    // primary still streams live tokens instead of blocking one-shot. Each equivalent
+    // provider/profile tuple is tried at most once per lane; read follow-ups re-run the
+    // SAME agent (inner loop) without re-consulting `seen`. A native-transport agent
+    // reads inside its one run; a failed attach re-runs it once on the prompt loop.
+    for (let orderIdx = 0; orderIdx < order.length; orderIdx++) {
+      const name = order[orderIdx];
       if (signal.aborted) throw new Error("canceled");
       const profile = profileFor(name);
       noteUnsupportedProfile(name, profile);
       const key = attemptKey(lane, name, profile);
       if (seen.has(key)) continue;
       seen.add(key);
-      // A non-streaming provider can request reads too; a read follow-up re-runs the
-      // SAME agent (inner loop) without re-consulting `seen`. A native-transport agent
-      // reads inside its one run; a failed attach re-runs it once on the prompt loop.
+
+      if (supportsStream(name)) {
+        // Inner loop: re-run the SAME streaming agent for each read follow-up, then stream the reply.
+        while (true) {
+          const transport = transportFor(name, lane);
+          const streamPrompt = promptFor(transport, name);
+          lastPromptBytes = Buffer.byteLength(streamPrompt, "utf8");
+          const started = Date.now();
+          let ttft: number | null = null;
+          const stream = createChatStreamFilter((event) => {
+            if (event.type === "delta" && event.text && ttft == null) ttft = Date.now() - started;
+            emit(id, event);
+          });
+          streamFilters.set(id, stream);
+          const timeoutMs = timeoutFor(name, profile);
+          const streamOnce = (extras: NativeLaunchExtras = {}) =>
+            runStreamingDep(name, streamPrompt, {
+              signal,
+              timeoutMs,
+              tools: extras.tools ?? toolsFor(name),
+              ...(extras.mcpConfigArgs ? { mcpConfigArgs: extras.mcpConfigArgs } : {}),
+              ...(extras.onPermit ? { onPermit: extras.onPermit } : {}),
+              // The athlete is watching this stream: it takes the spawn cap's reserved
+              // interactive permit rather than queueing behind batch lanes.
+              priority: "interactive",
+              op: lane ? `chat:${lane}` : "chat",
+              ...(profile.execution ?? {}),
+              onProgress: stream.progress,
+              onDelta: stream.push,
+            });
+          let nativeCallCount = 0;
+          try {
+            let res: AgentResult;
+            if (transport.transport === "native_mcp") {
+              const native = await runNative(name, transport, timeoutMs, streamOnce);
+              noteNative(native.calls);
+              nativeCallCount = native.calls.length;
+              if (native.attachFailed) {
+                stream.reset();
+                const attempt = decorate(
+                  {
+                    agent: name,
+                    ok: false,
+                    status: "read_attach_failed",
+                    error_class: "read_attach_failed",
+                    error_message: "Native coach reads did not attach; retrying on the prompt loop",
+                    exit_code: native.res?.code ?? null,
+                    failure_tail: native.res?.failure_tail ?? null,
+                    ...readTelemetry(transport, streamPrompt, nativeCallCount),
+                  },
+                  profile,
+                  true,
+                  ttft
+                );
+                recordChatAttempt(attempt, started, false, false);
+                attempts.push(attempt);
+                nativeFallback.add(name);
+                readPhase("Reviewing your history…");
+                continue; // the SAME agent, once, over the prompt loop
+              }
+              if (native.error) throw native.error;
+              res = native.res as AgentResult;
+              if (!String(res.raw ?? "").trim() && res.code === 0 && !signal.aborted) {
+                // Connected, then answered nothing: the run's listener is closed, so it is
+                // retried the way an attach failure is — the SAME agent, once, on the prompt loop.
+                stream.reset();
+                const attempt = decorate(
+                  {
+                    agent: name,
+                    ok: false,
+                    status: "empty_reply",
+                    error_class: "empty_reply",
+                    error_message: "Agent returned no reply",
+                    exit_code: res.code,
+                    ...readTelemetry(transport, streamPrompt, nativeCallCount),
+                  },
+                  profile,
+                  true,
+                  ttft
+                );
+                recordChatAttempt(attempt, started, false, false);
+                attempts.push(attempt);
+                nativeFallback.add(name);
+                continue;
+              }
+            } else {
+              res = await streamOnce();
+            }
+            stream.finish();
+            const raw = String(res.raw ?? "");
+            if (lane && parseChatEscalationRequest(raw, lane)) {
+              const attempt = decorate(
+                {
+                  agent: name,
+                  ok: true,
+                  status: "escalated",
+                  exit_code: res.code,
+                  model: res.usage?.model ?? null,
+                  ...readTelemetry(transport, streamPrompt, nativeCallCount),
+                },
+                profile,
+                true,
+                ttft
+              );
+              attempt.escalation_source = lane;
+              recordChatAttempt(attempt, started, true, false);
+              attempts.push(attempt);
+              escalate(raw, lane, stream);
+              continue laneLoop;
+            }
+            const readTurn = readTurnOf(raw, transport);
+            if (readTurn.kind === "query") {
+              const attempt = decorate(
+                {
+                  agent: name,
+                  ok: true,
+                  status: "reading_data",
+                  exit_code: res.code,
+                  model: res.usage?.model ?? null,
+                  ...readTelemetry(transport, streamPrompt, 0),
+                },
+                profile,
+                true,
+                ttft
+              );
+              const callsBefore = readState.calls;
+              const outcome = await runChatReadRound(readState, readTurn.query, {
+                runId: readRunId,
+                signal,
+                execute: executeCoachRead,
+              });
+              attempt.read_calls = readState.calls - callsBefore;
+              recordChatAttempt(attempt, started, true, false);
+              attempts.push(attempt);
+              stream.reset(); // the protocol turn streamed nothing (no reply marker) — clear the bubble
+              readPhase("Reviewing your history…");
+              if (outcome === "stop") readExhausted = true;
+              continue; // re-stream the same agent with the verified results (or, if exhausted, plain)
+            }
+            if (readTurn.kind === "malformed") {
+              // A coach_read-shaped turn that failed normalization must never be accepted
+              // as the reply (raw protocol JSON would leak into the bubble). Drop the read
+              // contract and re-stream the SAME agent once for a plain reply. Bounded:
+              // readExhausted stops the next pass from detecting a read at all.
+              const attempt = decorate(
+                {
+                  agent: name,
+                  ok: true,
+                  status: "read_malformed",
+                  exit_code: res.code,
+                  model: res.usage?.model ?? null,
+                  ...readTelemetry(transport, streamPrompt, 0),
+                },
+                profile,
+                true,
+                ttft
+              );
+              recordChatAttempt(attempt, started, true, false);
+              attempts.push(attempt);
+              stream.reset(); // the malformed protocol JSON never earns the bubble
+              readExhausted = true;
+              readPhase("Reviewing your history…");
+              continue;
+            }
+            const classified = classifyChatAgentResult(name, res);
+            const webAsk = classified ? null : webEscalationFor(raw);
+            const attempt = decorate(
+              {
+                ...(classified ?? {
+                  agent: name,
+                  ok: true,
+                  status: webAsk ? "web_escalated" : "ok",
+                  exit_code: res.code,
+                  model: res.usage?.model ?? null,
+                  input_tokens: res.usage?.input_tokens ?? null,
+                  output_tokens: res.usage?.output_tokens ?? null,
+                }),
+                ...readTelemetry(transport, streamPrompt, nativeCallCount),
+              },
+              profile,
+              true,
+              ttft
+            );
+            recordChatAttempt(attempt, started, !classified, false);
+            attempts.push(attempt);
+            if (webAsk) {
+              stream.reset(); // a from-memory answer (or the bare request) never stays in the bubble
+              beginWebEscalation(webAsk);
+              continue laneLoop;
+            }
+            if (!classified)
+              return { agent: name, raw, attempts, datedWeek: turnWeek, reads: turnReads(transport), promptBytes: lastPromptBytes, web: webOutcome(name) };
+            lastErr = new Error(`${name}: ${classified.error_message || classified.error_class || classified.status}`);
+          } catch (e: any) {
+            if (signal.aborted) throw e;
+            const attempt = decorate(
+              { ...classifyChatException(name, e), ...readTelemetry(transport, streamPrompt, nativeCallCount) },
+              profile,
+              true,
+              ttft
+            );
+            attempts.push(attempt);
+            try {
+              stopIfBusy(e, attempt);
+            } finally {
+              recordChatAttempt(attempt, started, false, false);
+            }
+            lastErr = e;
+          }
+          stream.reset();
+          if (orderIdx + 1 < order.length) stream.progress("Trying another route…");
+          break; // streaming produced no reply → try next provider in order
+        }
+        continue;
+      }
+
+      // Non-streaming provider (e.g. codex): one-shot path.
       while (true) {
         const transport = transportFor(name, lane);
         const runPrompt = promptFor(transport, name);

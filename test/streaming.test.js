@@ -230,3 +230,26 @@ test("parseChatReply: broadened stripper still keeps 'log'/'record' coaching ver
   assert.equal(parseChatReply("Let me record your PR — nice work.").reply,
     "Let me record your PR — nice work.");
 });
+
+test("chat stream filter streams first reply tokens immediately (zero 25-char holdback) while still gating partial sentinels", () => {
+  const events = [];
+  const stream = createChatStreamFilter((e) => events.push(e));
+  stream.push(`${CHAT_REPLY_SENTINEL}\nYes`);
+  const firstDeltas = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
+  assert.equal(firstDeltas, "\nYes", "a 3-char first token streams immediately with no fixed tail delay");
+
+  // A literal '=' holds back only that 1-char potential prefix, then flushes once prose resumes.
+  const beforeEq = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
+  stream.push(", 2 + 2 =");
+  const atEq = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
+  assert.equal(atEq, `${beforeEq}, 2 + 2 `);
+  stream.push(" 4.");
+  assert.equal(events.filter((e) => e.type === "delta").map((e) => e.text).join(""), "\nYes, 2 + 2 = 4.");
+
+  // Streaming the actions sentinel one character at a time must never leak any prefix.
+  for (const ch of `\n${CHAT_ACTION_SENTINEL}\n{"actions":[]}`) stream.push(ch);
+  stream.finish();
+  const full = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
+  assert.equal(full.trim(), "Yes, 2 + 2 = 4.");
+  assert.doesNotMatch(full, /CAIRN_ACTIONS|actions/);
+});

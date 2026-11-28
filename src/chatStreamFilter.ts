@@ -27,20 +27,40 @@ export type LiveReplyEvent =
 // Deltas begin only AFTER the marker, so there is never anything to retract. The
 // accumulated reply prose is kept so a reconnecting client (iOS backgrounding kills
 // the EventSource) can be handed the streamed-so-far text in the SSE snapshot.
+const POST_REPLY_SENTINELS = [
+  CHAT_ACTION_SENTINEL,
+  CHAT_ESCALATE_COACH_SENTINEL,
+  CHAT_ESCALATE_DEEP_SENTINEL,
+] as const;
+
+const POST_REPLY_MAX_PREFIX = Math.max(...POST_REPLY_SENTINELS.map((s) => s.length)) - 1;
+
+// Longest suffix of `text` (starting at or after `floor`) that is a strict prefix of any
+// post-reply sentinel. Returns 0 for ordinary prose that does not end with a sentinel
+// prefix (every Cairn sentinel begins with '='), so post-marker reply tokens stream with
+// zero artificial 25-char holdback while never leaking a forming sentinel.
+function formingSentinelHoldback(text: string, floor: number): number {
+  const maxLen = Math.min(text.length - floor, POST_REPLY_MAX_PREFIX);
+  for (let len = maxLen; len > 0; len--) {
+    const start = text.length - len;
+    if (text.charCodeAt(start) !== 61 /* '=' */) continue;
+    const suffix = text.slice(start);
+    for (const sentinel of POST_REPLY_SENTINELS) {
+      if (len < sentinel.length && sentinel.startsWith(suffix)) return len;
+    }
+  }
+  return 0;
+}
+
 export function createChatStreamFilter(emitLive: (e: LiveReplyEvent) => void) {
   let acc = "";
   let replyAt = -1;          // index in acc just past CHAT_REPLY_SENTINEL, once seen
   let emitted = 0;           // how far into acc we've emitted the reply as deltas
   let progressedTo = 0;      // how far into the PRE-marker text we've captioned
   let accumulatedReply = ""; // the reply prose streamed so far (for the SSE snapshot)
-  // Always hold back a forming sentinel at the tail so a half-marker never streams
-  // (and a forming reply marker isn't mistaken for a completed pre-marker line).
-  const TAIL = Math.max(
-    CHAT_ACTION_SENTINEL.length,
-    CHAT_REPLY_SENTINEL.length,
-    CHAT_ESCALATE_COACH_SENTINEL.length,
-    CHAT_ESCALATE_DEEP_SENTINEL.length
-  ) - 1;
+  // Pre-marker line guard: hold back a forming reply marker at the tail so it isn't
+  // consumed as a completed pre-marker narration line.
+  const PRE_MARKER_TAIL = CHAT_REPLY_SENTINEL.length - 1;
   let lastProgress = "";
   let lastProgressAt = 0;
 
@@ -59,7 +79,7 @@ export function createChatStreamFilter(emitLive: (e: LiveReplyEvent) => void) {
   const captionPreMarker = (final: boolean) => {
     // Only treat a line as "complete" up to the tail-safe boundary, so a forming
     // reply marker at the very end isn't consumed as a finished narration line.
-    const lineLimit = final ? acc.length : Math.max(0, acc.length - TAIL);
+    const lineLimit = final ? acc.length : Math.max(0, acc.length - PRE_MARKER_TAIL);
     while (progressedTo < lineLimit) {
       const nl = acc.indexOf("\n", progressedTo);
       if (nl === -1 || nl >= lineLimit) break;
@@ -88,7 +108,7 @@ export function createChatStreamFilter(emitLive: (e: LiveReplyEvent) => void) {
     if (hiddenCut >= replyAt) safeEnd = hiddenCut;   // malformed post-reply escalation: never leak the token
     else if (cut >= replyAt) safeEnd = cut;          // the real actions block
     else if (final) safeEnd = acc.length;
-    else safeEnd = Math.max(emitted, acc.length - TAIL);
+    else safeEnd = acc.length - formingSentinelHoldback(acc, emitted);
     if (safeEnd > emitted) {
       const chunk = acc.slice(emitted, safeEnd);
       emitted = safeEnd;
