@@ -5,6 +5,20 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.5.3] — 2026-11-28
+
+Chat replies start streaming sooner, mid-session exercise additions settle cleanly, and the coaching CLIs run leaner.
+
+### Added
+
+- **Mid-session exercise additions.** You can add or ask for an exercise in the middle of a workout and undo or remove it cleanly without losing the session.
+
+### Changed
+
+- **Faster chat first-token streaming and fallbacks.** Chat turns trim overhead before the first token arrives, and fallback agents stream replies instead of waiting for the full response.
+- **Leaner CLI handling across providers.** Refreshed CLI flags and package pins for Claude, Codex, Antigravity, and Grok.
+- **Antigravity telemetry and non-blocking startup probes.** Updated Antigravity runtime support with live progress and telemetry, and cached CLI startup probes so boot never blocks on discovery.
+
 ## [2.5.2] — 2026-11-27
 
 Train › Program opens with one fewer request.
