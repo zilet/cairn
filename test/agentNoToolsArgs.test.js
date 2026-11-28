@@ -63,3 +63,46 @@ test("an agent without lean flags is unchanged by the slot", () => {
   assert.equal(args.includes("--tools"), false);
   assert.equal(args.includes("{no_tools_args}"), false);
 });
+
+test("claude ships headless safety and cache-reuse flags on plain and stream runs", () => {
+  const prompt = applyToolPolicy("Say hello.", "none");
+  for (const template of [claude.args, claude.stream.args]) {
+    const { args } = buildAgentLaunch(claude, template, prompt);
+    const permAt = args.indexOf("--permission-prompts");
+    assert.ok(permAt >= 0 && args[permAt + 1] === "none");
+    assert.ok(args.includes("--exclude-dynamic-system-prompt-sections"));
+  }
+});
+
+test("grok ships no_tools_args for toolless runs and omits them on web, provider, and file runs", () => {
+  const grok = shipped.grok;
+  const expected = ["--no-memory", "--no-plan", "--no-subagents", "--disable-web-search"];
+  assert.deepEqual(grok.no_tools_args, expected);
+  for (const template of [grok.args, grok.stream.args]) {
+    assert.ok(template.includes("{no_tools_args}"));
+    const { args } = buildAgentLaunch(grok, template, applyToolPolicy("Say hello.", "none"));
+    for (const flag of expected) assert.ok(args.includes(flag), `toolless grok includes ${flag}`);
+  }
+  const webArgs = buildAgentLaunch(grok, grok.args, applyToolPolicy("Look up latest news.", "web")).args;
+  assert.equal(webArgs.includes("--disable-web-search"), false);
+  assert.equal(webArgs.includes("--no-memory"), false);
+  const providerArgs = buildAgentLaunch(grok, grok.args, applyToolPolicy("Research.", "provider")).args;
+  assert.equal(providerArgs.includes("--disable-web-search"), false);
+  const dataDir = path.resolve(process.env.DATA_DIR || "data");
+  const fileArgs = buildAgentLaunch(
+    grok,
+    grok.args,
+    applyToolPolicy(`Read ${path.join(dataDir, "uploads", "lab.pdf")} and summarize.`, "none")
+  ).args;
+  assert.equal(fileArgs.includes("--disable-web-search"), false);
+  assert.ok(fileArgs.includes("--cwd"));
+});
+
+test("antigravity disables slash commands and codex runs ephemeral by default", () => {
+  const agy = shipped.antigravity;
+  assert.ok(agy.args.includes("--disable-slash-commands"));
+  assert.ok(agy.stream.args.includes("--disable-slash-commands"));
+  const codex = shipped.codex;
+  assert.ok(codex.args.includes("--ephemeral"));
+  assert.equal(codex.read_tools.attach_args.includes("--ephemeral"), false, "no duplicate --ephemeral on MCP attach");
+});

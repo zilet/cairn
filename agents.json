@@ -1,13 +1,14 @@
 {
   "claude": {
     "command": "claude",
-    "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{web_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}"],
+    "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{web_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "--permission-prompts", "none", "--exclude-dynamic-system-prompt-sections", "-p", "{prompt}"],
     "input": "arg",
     "description": "Claude Code (Anthropic Pro/Max). Auth: ~/.claude.",
     "label": "Claude",
     "plan": "Claude Pro or Max",
     "env_required": [],
     "web_access": true,
+    "headless_note": "Verified live on claude 2.1.332 (2026-11-28) in both plain -p and stream-json modes (with no_tools_args): --permission-prompts none auto-denies any unexpected prompt instead of stalling headless -p, and --exclude-dynamic-system-prompt-sections moves per-machine sections out of the system prompt for better prompt-cache reuse.",
     "research_note": "Headless `claude -p` has WebSearch/WebFetch available, so it can do live evidence research for the grounding layer (settings.research_enabled). Extra fields here are informational only — runAgent reads just command/args/input/env_required.",
     "web_args": ["--allowedTools", "WebSearch,WebFetch"],
     "web_turn_args": ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch", "--strict-mcp-config", "--setting-sources", "user", "--disable-slash-commands", "--no-session-persistence"],
@@ -41,18 +42,18 @@
     "install": {
       "method": "npm",
       "package": "@anthropic-ai/claude-code",
-      "version": "2.1.322",
-      "size_mb": 350,
-      "size_note": "npm 2026-11-11: @anthropic-ai/claude-code-linux-x64@2.1.322 unpacks to 341.9 MB (arm64 341.5 MB); the launcher package is 0.2 MB. 2.1.322 is the build the native coach-read attach (read_tools) was verified on. npm's cache lives in a deleted temp dir, not on the data volume."
+      "version": "2.1.332",
+      "size_mb": 410,
+      "size_note": "npm 2026-11-28: @anthropic-ai/claude-code-linux-x64@2.1.332 unpacks to 402.3 MB (arm64 385.5 MB); the launcher package is 0.2 MB. npm's cache lives in a deleted temp dir, not on the data volume."
     },
     "stream": {
       "format": "claude",
-      "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{web_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+      "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{web_args}", "{model_args}", "{reasoning_args}", "--permission-prompts", "none", "--exclude-dynamic-system-prompt-sections", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
     }
   },
   "codex": {
     "command": "codex",
-    "args": ["{web_args}", "exec", "{model_args}", "{reasoning_args}", "--sandbox", "read-only", "--skip-git-repo-check", "{mcp_config_args}", "{file_access_args}", "{schema_args}", "{prompt}", "{image_args}"],
+    "args": ["{web_args}", "exec", "{model_args}", "{reasoning_args}", "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral", "{mcp_config_args}", "{file_access_args}", "{schema_args}", "{prompt}", "{image_args}"],
     "input": "arg",
     "description": "OpenAI Codex (Sign in with ChatGPT). Auth: ~/.codex.",
     "label": "ChatGPT",
@@ -72,10 +73,10 @@
     "file_access_args": ["--cd", "{data_dir}", "--add-dir", "{data_dir}"],
     "read_tools": {
       "transport": "native_mcp",
-      "attach_args": ["--ignore-user-config", "--ephemeral", "-c", "mcp_servers.cairn_coach_read.url=\"{mcp_url}\"", "-c", "mcp_servers.cairn_coach_read.default_tools_approval_mode=\"approve\"", "--disable", "shell_tool", "--disable", "apps", "--disable", "plugins", "--disable", "goals", "-c", "web_search=\"disabled\""],
+      "attach_args": ["--ignore-user-config", "-c", "mcp_servers.cairn_coach_read.url=\"{mcp_url}\"", "-c", "mcp_servers.cairn_coach_read.default_tools_approval_mode=\"approve\"", "--disable", "shell_tool", "--disable", "apps", "--disable", "plugins", "--disable", "goals", "-c", "web_search=\"disabled\""],
       "confinement": "sandboxed",
       "verified": "codex 0.163.0, 2026-11-11",
-      "note": "Verified live 2026-11-11 (codex exec against a throwaway loopback MCP server): 7/7 correct, median 7 s. Without default_tools_approval_mode=approve the call fails ('MCP tool call requires approval, but approval policy is never'). --disable shell_tool is MANDATORY: with the shell left on it read a local file. --ignore-user-config keeps an ambient MCP server from ~/.codex/config.toml out of the run (auth still comes from CODEX_HOME; a model set only in config.toml is not read on these runs — a Settings model binding still is, through {model_args}). NOT a strict allowlist: apply_patch and connector tools remain, held by the --sandbox read-only already in args — hence confinement 'sandboxed'. The probe ran with --json to watch the item.started/completed mcp_tool_call events; Cairn's runs do NOT pass --json, so stdout stays the final agent message and the existing parse path (and --output-schema) is unchanged — the listener records every call server-side instead. Codex has no streaming here, so it answers one-shot. A feature name a later CLI drops fails the spawn, which the chat path treats as an attach failure and retries once on the prompt loop."
+      "note": "Verified live 2026-11-11 (codex exec against a throwaway loopback MCP server): 7/7 correct, median 7 s. Without default_tools_approval_mode=approve the call fails ('MCP tool call requires approval, but approval policy is never'). --disable shell_tool is MANDATORY: with the shell left on it read a local file. --ignore-user-config keeps an ambient MCP server from ~/.codex/config.toml out of the run (auth still comes from CODEX_HOME; a model set only in config.toml is not read on these runs — a Settings model binding still is, through {model_args}). --ephemeral now lives in base codex.args so every Cairn codex exec run skips writing session files to disk. NOT a strict allowlist: apply_patch and connector tools remain, held by the --sandbox read-only already in args — hence confinement 'sandboxed'. The probe ran with --json to watch the item.started/completed mcp_tool_call events; Cairn's runs do NOT pass --json, so stdout stays the final agent message and the existing parse path (and --output-schema) is unchanged — the listener records every call server-side instead. Codex has no streaming here, so it answers one-shot. A feature name a later CLI drops fails the spawn, which the chat path treats as an attach failure and retries once on the prompt loop."
     },
     "large_prompt": { "via": "stdin_dash" },
     "image_args": ["--image", "{image}"],
@@ -89,18 +90,18 @@
     "install": {
       "method": "npm",
       "package": "@openai/codex",
-      "version": "0.166.0",
+      "version": "0.172.0",
       "args": ["--include=optional"],
       "size_mb": 480,
-      "size_note": "npm 2026-11-03: @openai/codex@0.166.0-linux-x64 unpacks to 456.2 MB (linux-arm64 408.6 MB)."
+      "size_note": "npm 2026-11-28: @openai/codex@0.172.0-linux-x64 unpacks to 449.3 MB (linux-arm64 446.2 MB)."
     }
   },
   "antigravity": {
     "command": "agy",
-    "args": ["--settings", "{\"permissions\":{\"deny\":[\"command(*)\"]}}", "{file_access_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}", "--print-timeout", "5m"],
+    "args": ["--settings", "{\"permissions\":{\"deny\":[\"command(*)\"]}}", "--disable-slash-commands", "{file_access_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}", "--print-timeout", "5m"],
     "stream": {
       "format": "agy",
-      "args": ["--settings", "{\"permissions\":{\"deny\":[\"command(*)\"]}}", "{file_access_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--print-timeout", "5m", "--output-format", "stream-json"]
+      "args": ["--settings", "{\"permissions\":{\"deny\":[\"command(*)\"]}}", "--disable-slash-commands", "{file_access_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--print-timeout", "5m", "--output-format", "stream-json"]
     },
     "input": "arg",
     "description": "Google Antigravity CLI 'agy' (the successor to the Gemini CLI; Google account). Auth: ~/.gemini.",
@@ -117,6 +118,7 @@
     "model_flag": ["--model", "{model}"],
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
+    "reasoning_note": "agy 1.5.19 --help lists --effort (low|medium|high|xhigh|max), and some models accept xhigh, but Cairn intentionally caps capabilities.reasoning at low/medium/high so server effort policy never pushes agy to xhigh.",
     "model_effort_suffix": true,
     "model_effort_suffix_note": "agy accepts both an alias plus --effort (`--model gemini-4-argon --effort high`) and a name with the effort baked in (`gemini-4-argon-low`), but refuses the two together ('--model gemini-4-argon-low conflicts with --effort', verified 2026-10-16). Bind the bare alias so server effort policy applies; a suffixed name runs WITHOUT --effort (resolveAgentExecutionProfile, src/agents.ts).",
     "file_access_args": ["--add-dir", "{data_dir}"],
@@ -154,14 +156,15 @@
   },
   "grok": {
     "command": "grok",
-    "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}"],
+    "args": ["{file_access_args}", "{no_tools_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}"],
     "input": "arg",
     "description": "xAI Grok Build (SuperGrok/X Premium+). Headless may need XAI_API_KEY.",
     "label": "Grok",
     "plan": "SuperGrok or an xAI key",
     "env_required": [],
     "web_access": true,
-    "web_note": "grok 1.0.88 --help lists '--disable-web-search  Disable web search and web fetch tools', so web search and fetch are DEFAULT tools of a headless run; no flag is needed to turn them on (hence no web_args). On every no-tools run NO_TOOLS_PREAMBLE keeps them unused; a web turn's WEB_TOOLS_PREAMBLE invites them. Not live-verified from this change: a headless search answering with sources.",
+    "web_note": "grok 1.0.92 --help lists '--disable-web-search  Disable web search and web fetch tools', so web search and fetch are DEFAULT tools of a headless run; no flag is needed to turn them on (hence no web_args). Toolless runs expand no_tools_args (--no-memory, --no-plan, --no-subagents, --disable-web-search — verified live on grok 1.0.92 in both plain and streaming-json modes) to skip memory/plan/subagent/web overhead; web turns (tools \"web\") and research (tools \"provider\") leave {no_tools_args} unexpanded so web search and fetch stay enabled.",
+    "no_tools_args": ["--no-memory", "--no-plan", "--no-subagents", "--disable-web-search"],
     "login": ["login", "--device-auth"],
     "status_check": ["models"],
     "login_note": "Re-verified on grok 1.0.46 (2026-10-07): `grok login --device-auth` (alias --device-code) still exists and needs no TTY. It prints 'To sign in, open this URL in your browser:' + https://accounts.x.ai/oauth2/device?user_code=XXXX-XXXX, then 'Confirm this code in your browser:' + the bare code, then waits ('Waiting for authorization...'). Tokens land in ~/.grok/auth.json.",
@@ -201,7 +204,7 @@
     },
     "stream": {
       "format": "grok",
-      "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--output-format", "streaming-json"]
+      "args": ["{file_access_args}", "{no_tools_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--output-format", "streaming-json"]
     }
   },
   "stub": {
