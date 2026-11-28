@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   NO_TOOLS_PREAMBLE,
+  modelNameCarriesEffort,
   normalizedAgentCapabilities,
   resolveAgentExecutionProfile,
   resolveAgentProfileForClass,
@@ -123,6 +124,19 @@ test("execution profile helpers declare support, map xhigh, and make stub no-op 
   assert.deepEqual(stub.effective, {});
   assert.equal(stub.noop, true);
   assert.match(stub.adjustments[0], /offline stub/);
+
+  // Effort-suffixed agy models (including xhigh/max) must omit --effort to avoid CLI conflict.
+  for (const suffixed of ["gemini-4-neon-low", "gemini-4-neon-medium", "gemini-4-neon-high", "gemini-4-neon-xhigh", "gemini-4-neon-max"]) {
+    assert.equal(modelNameCarriesEffort(bundled.antigravity, suffixed), true, suffixed);
+    const resolved = resolveAgentExecutionProfile(bundled.antigravity, { model: suffixed, reasoning: "medium" });
+    assert.deepEqual(resolved.effective, { model: suffixed });
+    assert.match(resolved.adjustments[0], /names its own effort/);
+  }
+  assert.equal(modelNameCarriesEffort(bundled.antigravity, "gemini-4-neon"), false);
+  assert.deepEqual(resolveAgentExecutionProfile(bundled.antigravity, { model: "gemini-4-neon", reasoning: "medium" }).effective, {
+    model: "gemini-4-neon",
+    reasoning: "medium",
+  });
 });
 
 test("all provider one-shot argv templates expand exact profile flags and preserve unset/file/image/MCP ordering", () =>

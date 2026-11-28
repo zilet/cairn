@@ -165,6 +165,77 @@ test("parseModelsOutput drops CLI log noise so it never becomes a dropdown entry
   assert.deepEqual(parseModelsOutput(raw), ["grok-4.7", "grok-4.7-build-fast"]);
 });
 
+test("parseModelsOutput cleanly parses agy 1.5.19 models including spinner ANSI lines", () => {
+  const raw = [
+    "⠋ Fetching available models...\r⠙ Fetching available models...\r\u001b[2Kgemini-4-neon-high\tGemini 4 Neon (High)",
+    "gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)",
+    "gemini-4-argon-medium\tGemini 4 Argon (Medium)",
+    "gemini-4-carbon-low\tGemini 4 Carbon (Low)",
+    "gemini-4-hydrogen-xhigh\tGemini 4 Hydrogen (XHigh)",
+    "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
+    "Fetching available models...",
+  ].join("\n");
+  assert.deepEqual(parseModelsOutput(raw), [
+    "gemini-4-neon-high",
+    "gemini-4-neon-xhigh",
+    "gemini-4-argon-medium",
+    "gemini-4-carbon-low",
+    "gemini-4-hydrogen-xhigh",
+    "gemini-3.8-flash-medium",
+  ]);
+});
+
+test("status_check sharing models_list argv seeds the models cache without a second spawn", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { fileURLToPath, pathToFileURL } = await import("node:url");
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-status-models-reuse-"));
+  try {
+    const countFile = path.join(dir, "count.txt");
+    fs.writeFileSync(countFile, "0");
+    const script = [
+      `const fs = require("fs");`,
+      `const n = Number(fs.readFileSync(${JSON.stringify(countFile)}, "utf8")) + 1;`,
+      `fs.writeFileSync(${JSON.stringify(countFile)}, String(n));`,
+      `process.stdout.write("You are logged in with grok.com.\\nDefault model: grok-4.7\\nAvailable models:\\n  * grok-4.7 (default)\\n  - grok-4.6\\n");`,
+    ].join(" ");
+    const config = {
+      grok: {
+        command: process.execPath,
+        args: ["-p", "{prompt}"],
+        status_check: ["-e", script],
+        models_list: ["-e", script],
+      },
+    };
+    const configPath = path.join(dir, "agents.json");
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    const agentsUrl = pathToFileURL(path.join(root, "dist", "agents.js")).href;
+    const runner = [
+      `import { reprobeAgentConfigured, listAgentModelsAsync } from ${JSON.stringify(agentsUrl)};`,
+      `import fs from "node:fs";`,
+      "const verdict = await reprobeAgentConfigured('grok');",
+      "const models = await listAgentModelsAsync('grok');",
+      `const spawns = Number(fs.readFileSync(${JSON.stringify(countFile)}, "utf8"));`,
+      "process.stdout.write('__REUSE__' + JSON.stringify({ verdict, models, spawns }));",
+    ].join("\n");
+    const res = spawnSync(process.execPath, ["--input-type=module", "-e", runner], {
+      cwd: root,
+      env: { ...process.env, AGENTS_CONFIG: configPath, DATA_DIR: dir, DB_PATH: path.join(dir, "cairn.db") },
+      encoding: "utf8",
+    });
+    assert.equal(res.status, 0, res.stderr);
+    const out = JSON.parse(res.stdout.slice(res.stdout.lastIndexOf("__REUSE__") + "__REUSE__".length));
+    assert.equal(out.verdict, true);
+    assert.deepEqual(out.models, ["grok-4.7", "grok-4.6"]);
+    assert.equal(out.spawns, 1, "models listing reused the status_check spawn");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the live catalog is read without blocking, cached, and re-read after the CLI changes", async () => {
   const { spawnSync } = await import("node:child_process");
   const fs = await import("node:fs");

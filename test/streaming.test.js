@@ -134,6 +134,23 @@ test("streamProgress(grok): shows progress without leaking raw thoughts", () => 
   assert.equal(streamProgress("grok", `{"type":"text","data":"on pace"}`), null);
 });
 
+test("streamProgress(agy): maps thinking/tool step_updates to sanitized progress", () => {
+  const thought = streamProgress(
+    "agy",
+    `{"event":"step_update","step_update":{"step_type":"agent_response","thinking_delta":"Checking private meal protein calories"}}`
+  );
+  assert.equal(thought, "Reading the food context…");
+  assert.ok(!thought.includes("private meal"));
+  assert.equal(
+    streamProgress("agy", `{"event":"step_update","step_update":{"step_type":"tool_call","tool_name":"grep_search"}}`),
+    "Checking your Cairn data…"
+  );
+  assert.equal(
+    streamProgress("agy", `{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"on pace"}}`),
+    null
+  );
+});
+
 test("streamDelta: junk / unknown shapes yield null, never garbage", () => {
   assert.equal(streamDelta("claude", "not json at all"), null);
   assert.equal(streamDelta("claude", ""), null);

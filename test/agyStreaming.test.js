@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { invalidateAgentConfigured, runAgentStreaming, streamDelta, streamFinalText } from "../dist/agents.js";
+import { invalidateAgentConfigured, runAgentStreaming, streamDelta, streamFinalText, streamProgress } from "../dist/agents.js";
 import { structuredErrorText } from "../dist/agentFailureTail.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -101,5 +101,55 @@ test("an agy run that answered in one piece still reads, from its result", async
   await withFakeAgy([LINES.init, LINES.input, LINES.result], async () => {
     const out = await runAgentStreaming("antigravity", "Say something.", { timeoutMs: 10_000 });
     assert.equal(out.raw, "Running builds endurance and clears the mind.\n");
+  });
+});
+
+test("streamProgress(agy): sanitizes thinking and tool step_updates, ignores init/input/text/result", () => {
+  assert.equal(streamProgress("agy", LINES.init), null);
+  assert.equal(streamProgress("agy", LINES.input), null);
+  assert.equal(streamProgress("agy", LINES.delta1), null);
+  assert.equal(streamProgress("agy", LINES.result), null);
+  const thought = step({
+    step_index: 1,
+    state: "ACTIVE",
+    step_type: "thinking",
+    text_delta: "Inspecting private ApoB blood lab markers before answering",
+  });
+  const progress = streamProgress("agy", thought);
+  assert.equal(progress, "Reading health context…");
+  assert.ok(!progress.includes("private ApoB"));
+  const tool = step({ step_index: 2, state: "ACTIVE", step_type: "view_file", tool_name: "view_file" });
+  assert.equal(streamProgress("agy", tool), "Checking your Cairn data…");
+  const unknown = step({ step_index: 3, state: "DONE", step_type: "checkpoint" });
+  assert.equal(streamProgress("agy", unknown), null);
+});
+
+test("a streamed agy 1.5.19 run captures model + token usage and forwards progress", async () => {
+  const v1519 = [
+    JSON.stringify({ event: "init", conversation_id: conv, init: { model: "gemini-4-neon", cwd: "/tmp" } }),
+    LINES.input,
+    step({ step_index: 1, state: "ACTIVE", step_type: "planner_thought", text_delta: "Checking workout sleep HRV" }),
+    LINES.delta1,
+    LINES.delta2,
+    LINES.done,
+    JSON.stringify({
+      event: "result",
+      result: {
+        conversation_id: conv,
+        status: "SUCCESS",
+        response: "Running builds endurance and clears the mind.\n",
+        usage: { input_tokens: 18223, output_tokens: 22, thinking_tokens: 20, cache_read_tokens: 0, total_tokens: 18245 },
+      },
+    }),
+  ];
+  await withFakeAgy(v1519, async () => {
+    const progress = [];
+    const out = await runAgentStreaming("antigravity", "Say something.", {
+      onProgress: (label) => progress.push(label),
+      timeoutMs: 10_000,
+    });
+    assert.equal(out.code, 0);
+    assert.deepEqual(progress, ["Reading training context…"]);
+    assert.deepEqual(out.usage, { model: "gemini-4-neon", input_tokens: 18223, output_tokens: 22 });
   });
 });

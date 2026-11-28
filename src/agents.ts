@@ -613,6 +613,16 @@ function fallbackConfigured(name: string, def: AgentDef): boolean | null {
   return null;
 }
 
+function sameArgv(a: string[] | null | undefined, b: string[] | null | undefined): boolean {
+  return Array.isArray(a) && Array.isArray(b) && a.length > 0 && a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+function seedModelsRawFromStatus(name: string, def: AgentDef, verdict: boolean | null, r: StatusProbeRun, epoch: number): void {
+  if (verdict !== true || r.error || epoch !== modelsEpoch || modelsRawCache.has(name)) return;
+  if (!sameArgv(def.status_check, def.models_list)) return;
+  modelsRawCache.set(name, `${r.stdout || ""}\n${r.stderr || ""}`);
+}
+
 function probeConfigured(name: string, def: AgentDef): { verdict: boolean | null; timedOut: boolean } {
   let timedOut = false;
   // 1. A status_check is the strongest signal — run it and parse stdout.
@@ -620,6 +630,7 @@ function probeConfigured(name: string, def: AgentDef): { verdict: boolean | null
     // Don't even spawn if the binary isn't installed (and don't false-negative —
     // an absent binary is "present:false" territory, not "logged out").
     if (!commandPresent(def.command)) return { verdict: null, timedOut: false };
+    const epoch = modelsEpoch;
     try {
       const r = spawnSync(def.command, def.status_check, {
         ...buildAgentSpawnOptions({ kind: "status", restoreEnvKeys: def.env_required || [] }),
@@ -628,6 +639,7 @@ function probeConfigured(name: string, def: AgentDef): { verdict: boolean | null
       });
       timedOut = probeTimedOut(r as StatusProbeRun);
       const verdict = readStatusProbe(name, r as StatusProbeRun);
+      seedModelsRawFromStatus(name, def, verdict, r as StatusProbeRun, epoch);
       if (verdict !== null) return { verdict, timedOut: false };
       // status_check ran but we couldn't read it — fall through to the evidence.
     } catch { /* fall through to the fallback signals */ }
@@ -687,6 +699,7 @@ export function reprobeAgentConfigured(name: string): Promise<boolean | null> {
   if (!Array.isArray(def.status_check) || !def.status_check.length || !peekCommandPresent(def.command)) {
     return Promise.resolve(remember(fallbackConfigured(name, def)));
   }
+  const epoch = modelsEpoch;
   return new Promise((resolve) => {
     try {
       execFile(
@@ -704,6 +717,7 @@ export function reprobeAgentConfigured(name: string): Promise<boolean | null> {
           const spawnFailed = !!error && (typeof (error as any).code === "string" || !!(error as any).killed);
           const run: StatusProbeRun = { error: spawnFailed ? (error as any) : undefined, stdout, stderr };
           const verdict = readStatusProbe(name, run);
+          seedModelsRawFromStatus(name, def, verdict, run, epoch);
           resolve(remember(verdict !== null ? verdict : fallbackConfigured(name, def), !!(error as any)?.killed));
         }
       );
@@ -827,29 +841,25 @@ export function warmAgentProbes(): void {
   } catch {
     return;
   }
-  // One probe per macrotask: presence, login and version each spawn a process,
-  // and three spawnSyncs in one tick blocked the event loop for over a second
-  // on a Pi right after the server started listening.
-  const probes: Array<() => void> = [];
-  for (const name of names) {
-    probes.push(() => {
-      const cmd = loadAgents()[name]?.command;
-      if (cmd) commandPresent(cmd);
-    });
-    probes.push(() => agentConfigured(name));
-    // Normally a cache hit: the presence probe above kept its `--version` print.
-    probes.push(() => agentVersion(name));
-  }
-  const step = (index: number): void => {
-    if (index >= probes.length) return;
-    try {
-      probes[index]();
-    } catch {
-      /* best effort */
+  // Run the probes asynchronously off the event loop (one agent at a time so boot
+  // never spikes CPU on a small host, and never blocks HTTP/chat requests with a
+  // multi-second spawnSync like `agy -p /quota`).
+  const run = async (): Promise<void> => {
+    for (const name of names) {
+      try {
+        const cmd = loadAgents()[name]?.command;
+        if (cmd) await refreshCommandPresent(cmd);
+      } catch { /* best effort */ }
+      try {
+        await refreshAgentConfigured(name);
+      } catch { /* best effort */ }
+      try {
+        // Normally a cache hit: the presence probe above kept its `--version` print.
+        await refreshAgentVersion(name);
+      } catch { /* best effort */ }
     }
-    setImmediate(() => step(index + 1));
   };
-  setImmediate(() => step(0));
+  setImmediate(() => { void run(); });
 }
 
 // ---------- version / model visibility (read-only) ----------
@@ -1200,21 +1210,23 @@ export function parseModelsOutput(raw: string, format: AgentDef["models_format"]
   if (format === "codex_json") return parseCodexModelsJson(raw);
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const lineRaw of (raw || "").split(/\r?\n/)) {
-    let line = lineRaw.trim();
+  for (const lineRaw of (raw || "").split(/\r\n|\n|\r/)) {
+    // Strip leading line-erase / cursor-column ANSI controls a spinner writes before
+    // printing the first model on the same line, while still dropping ANSI-colored log lines.
+    let line = lineRaw.trim().replace(/^(?:\u001b\[[0-9;?]*[KG])+/g, "").trim();
     if (!line) continue;
     // Log noise, never a model: ANSI escapes, glog-style records, error/warning lines.
     if (line.includes("\u001b[")) continue;
     if (/^[IWEF]\d{4} \d{2}:\d{2}:\d{2}/.test(line)) continue;
     if (/^(error|warning|warn|fatal|panic)\b[:\s]/i.test(line)) continue;
-    // Drop a common leading list marker ("- ", "* ", "• ", "› ", "→ ").
-    line = line.replace(/^[-*•›→]\s+/, "").trim();
+    // Drop a common leading list marker ("- ", "* ", "• ", "› ", "→ ") or spinner glyph.
+    line = line.replace(/^[-*•›→⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+/, "").trim();
     // Skip obvious header / status / banner noise (the grok/agy listings prepend a
-    // "You are logged in…" / "Default model: …" line before the catalog).
-    if (/^(available models|models?:|usage:|select|choose|default model|current model|you are (logged|signed) in)\b/i.test(line)) continue;
-    // A prose sentence (ends with a period, has interior spaces) is a banner, not a
-    // model id — model ids don't end in a period.
-    if (/[.!?]$/.test(line) && /\s/.test(line)) continue;
+    // "You are logged in…" / "Default model: …" / "Fetching available models…" line).
+    if (/^(available models|models?:|usage:|select|choose|default model|current model|fetching|loading|you are (?:logged|signed) in|you are not authenticated)\b/i.test(line)) continue;
+    // A prose sentence (ends with punctuation/ellipsis, has interior spaces) is a banner,
+    // not a model id — model ids don't end in a period.
+    if (/[.!?…]$/.test(line) && /\s/.test(line)) continue;
     // Take the first column as the model entry (keep a friendly label intact, e.g.
     // "Gemini 3.5 Flash (Medium)"; only split on a 2+-space / tab column gutter).
     const token = line.split(/\s{2,}|\t/)[0].trim().replace(/\s*\((?:current|default)\)\s*$/i, "").trim();
@@ -1401,6 +1413,36 @@ function usageEnvelope(obj: any): { usage: any; model: unknown } | null {
     return { usage: obj.response.usage, model: obj.response.model };
   if (obj.type === "usage" && obj.data && typeof obj.data === "object")
     return { usage: obj.data, model: obj.data.model };
+  // agy stream-json opens with {event:"init",conversation_id,init:{model,…}}
+  // and closes with {event:"result",result:{status,response,usage:{…}}}.
+  if (
+    obj.event === "init" &&
+    typeof obj.conversation_id === "string" &&
+    obj.init &&
+    typeof obj.init === "object" &&
+    typeof obj.init.model === "string"
+  )
+    return { usage: {}, model: obj.init.model };
+  if (
+    obj.event === "result" &&
+    obj.result &&
+    typeof obj.result === "object" &&
+    typeof obj.result.status === "string" &&
+    obj.result.usage &&
+    typeof obj.result.usage === "object" &&
+    !Array.isArray(obj.result.usage)
+  )
+    return { usage: obj.result.usage, model: obj.result.model ?? obj.result.usage.model };
+  // One-shot agy `--output-format json` emits {conversation_id,status,response,duration_seconds,usage}.
+  if (
+    typeof obj.conversation_id === "string" &&
+    obj.conversation_id.trim().length > 0 &&
+    typeof obj.status === "string" &&
+    obj.usage &&
+    typeof obj.usage === "object" &&
+    !Array.isArray(obj.usage)
+  )
+    return { usage: obj.usage, model: obj.model ?? obj.usage.model };
   return null;
 }
 
@@ -1670,7 +1712,7 @@ export function resolveAgentExecutionProfile(
   return profile;
 }
 
-const EFFORT_SUFFIXED_MODEL = /-(?:low|medium|high)$/i;
+const EFFORT_SUFFIXED_MODEL = /-(?:low|medium|high|xhigh|max)$/i;
 
 /** A model name with the effort baked in, on a CLI that refuses it beside its effort flag. */
 export function modelNameCarriesEffort(def: AgentDef, model: string): boolean {
@@ -3293,7 +3335,9 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
 //             {"type":"thought","data":"…"} reasoning (ignored); {"type":"end",…} terminal
 //   - codex   exec `--json` delivers the agent message ONLY as a complete item
 //             (no token deltas), so streaming buys nothing — codex stays one-shot.
-//   - agy     has no streaming flag at all — one-shot.
+//   - agy     `--output-format stream-json`  (verified live, agy 1.3.4 / 1.5.19)
+//             {"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"…"}}
+//             non-response thinking/tool step_updates feed streamProgress; {"event":"result",…} terminal
 // streamDelta maps ONE line to the assistant text it carries, or null for any non-
 // text event. streamProgress maps reasoning/tool status events to a short,
 // sanitized progress label (never raw chain-of-thought). Both are deliberately
@@ -3386,6 +3430,46 @@ export function streamProgress(format: string, line: string): string | null {
       const c = u.content;
       if (typeof c === "string") return progressLabelFromText(c);
       if (c && typeof c.text === "string") return progressLabelFromText(c.text);
+    }
+    return null;
+  }
+  if (format === "agy") {
+    const step = obj?.event === "step_update" ? obj.step_update : null;
+    if (!step || typeof step !== "object") return null;
+    const stepType = typeof step.step_type === "string" ? step.step_type.trim() : "";
+    if (!stepType || stepType === "user_input") return null;
+    if (stepType === "agent_response") {
+      if (typeof step.text_delta === "string") return null;
+      const thought =
+        typeof step.thinking_delta === "string"
+          ? step.thinking_delta
+          : typeof step.thinking === "string"
+            ? step.thinking
+            : typeof step.thought === "string"
+              ? step.thought
+              : null;
+      return thought && thought.trim() ? progressLabelFromText(thought) : null;
+    }
+    if (/think|thought|reason/i.test(stepType)) {
+      const thought =
+        typeof step.thinking_delta === "string"
+          ? step.thinking_delta
+          : typeof step.text_delta === "string"
+            ? step.text_delta
+            : typeof step.thinking === "string"
+              ? step.thinking
+              : typeof step.thought === "string"
+                ? step.thought
+                : typeof step.text === "string"
+                  ? step.text
+                  : "";
+      return thought.trim() ? progressLabelFromText(thought) : "Thinking through the context…";
+    }
+    if (
+      typeof step.tool_name === "string" ||
+      /tool|function|call|command|file|view|read|grep|find|list|dir|search|url|fetch|browse|mcp/i.test(stepType)
+    ) {
+      return "Checking your Cairn data…";
     }
     return null;
   }

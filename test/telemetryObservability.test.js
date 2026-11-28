@@ -244,6 +244,50 @@ test("agent usage ignores domain-shaped model fields", () => {
   );
 });
 
+test("agent usage extracts agy stream-json and one-shot envelopes without domain false positives", () => {
+  const stream = [
+    '{"event":"init","conversation_id":"conv-1","init":{"model":"gemini-4-neon","cwd":"/tmp"}}',
+    '{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"Ready."}}',
+    '{"event":"result","result":{"status":"SUCCESS","response":"Ready.","usage":{"input_tokens":18223,"output_tokens":22,"thinking_tokens":20,"cache_read_tokens":0,"total_tokens":18245}}}',
+  ].join("\n");
+  assert.deepEqual(extractAgentUsage(stream), {
+    model: "gemini-4-neon",
+    input_tokens: 18223,
+    output_tokens: 22,
+  });
+
+  const oneShot = JSON.stringify({
+    conversation_id: "conv-2",
+    status: "SUCCESS",
+    response: '{"ok":true}',
+    duration_seconds: 1.4,
+    model: "gemini-4-neon",
+    usage: { input_tokens: 410, output_tokens: 35, total_tokens: 445 },
+  });
+  assert.deepEqual(extractAgentUsage(oneShot), {
+    model: "gemini-4-neon",
+    input_tokens: 410,
+    output_tokens: 35,
+  });
+
+  // Missing required agy envelope anchors must stay ignored as domain JSON.
+  assert.deepEqual(extractAgentUsage('{"event":"init","init":{"model":"gemini-4-neon"}}'), {
+    model: null,
+    input_tokens: null,
+    output_tokens: null,
+  });
+  assert.deepEqual(extractAgentUsage('{"conversation_id":"conv-3","usage":{"input_tokens":7,"output_tokens":3}}'), {
+    model: null,
+    input_tokens: null,
+    output_tokens: null,
+  });
+  assert.deepEqual(extractAgentUsage('{"conversation_id":"","status":"SUCCESS","usage":{"input_tokens":7,"output_tokens":3}}'), {
+    model: null,
+    input_tokens: null,
+    output_tokens: null,
+  });
+});
+
 test("build identity prefers a validated environment SHA and has a safe fallback", () => {
   const exact = resolveBuildInfo({ CAIRN_BUILD_SHA: "A".repeat(40) }, () => "b".repeat(40));
   assert.equal(exact.build_sha, "a".repeat(40));
