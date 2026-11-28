@@ -57,8 +57,9 @@ function providerConfig() {
   return out;
 }
 
-// agy's every coaching run carries the explicit shell deny (agents.json settings_note).
-const AGY_DENY = ["--settings", '{"permissions":{"deny":["command(*)"]}}'];
+// agy's every coaching run carries the explicit shell deny and disables slash commands (agents.json).
+const AGY_DENY = ["--settings", '{"permissions":{"deny":["command(*)"]}}', "--disable-slash-commands"];
+const CLAUDE_HEADLESS = ["--permission-prompts", "none", "--exclude-dynamic-system-prompt-sections"];
 
 function expectedArgv(name, dataDir, prompt, withProfile) {
   const profile = withProfile
@@ -72,7 +73,17 @@ function expectedArgv(name, dataDir, prompt, withProfile) {
         ]
     : [];
   if (name === "claude") {
-    return ["--add-dir", dataDir, "--mcp-config", '{"mcpServers":{}}', "--strict-mcp-config", ...profile, "-p", prompt];
+    return [
+      "--add-dir",
+      dataDir,
+      "--mcp-config",
+      '{"mcpServers":{}}',
+      "--strict-mcp-config",
+      ...profile,
+      ...CLAUDE_HEADLESS,
+      "-p",
+      prompt,
+    ];
   }
   if (name === "codex") {
     return [
@@ -81,6 +92,7 @@ function expectedArgv(name, dataDir, prompt, withProfile) {
       "--sandbox",
       "read-only",
       "--skip-git-repo-check",
+      "--ephemeral",
       // codex declares an {mcp_config_args} slot for its native coach-read attach.
       "--mcp-config",
       '{"mcpServers":{}}',
@@ -527,13 +539,14 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
     const argv = JSON.parse(res.stdout.slice(at + marker.length));
     // fast/low vs deep/high, expressed in each CLI's own flags. Nobody gets --model
     // until the person chooses one.
-    // A no-tools prompt also starts claude lean (agents.json no_tools_args).
+    // A no-tools prompt also starts claude and grok lean (agents.json no_tools_args).
     const lean = providerConfig().claude.no_tools_args ?? [];
-    assert.deepEqual(argv.claude.day_read, [...lean, "--effort", "low", "-p", prompt]);
-    assert.deepEqual(argv.claude.proposal, [...lean, "--effort", "medium", "-p", prompt]);
+    const grokLean = providerConfig().grok.no_tools_args ?? [];
+    assert.deepEqual(argv.claude.day_read, [...lean, "--effort", "low", ...CLAUDE_HEADLESS, "-p", prompt]);
+    assert.deepEqual(argv.claude.proposal, [...lean, "--effort", "medium", ...CLAUDE_HEADLESS, "-p", prompt]);
     // With deep bound to opus: the deep op carries it, the fast op still does not.
-    assert.deepEqual(argv.bound.day_read, [...lean, "--effort", "low", "-p", prompt]);
-    assert.deepEqual(argv.bound.proposal, [...lean, "--model", "opus", "--effort", "medium", "-p", prompt]);
+    assert.deepEqual(argv.bound.day_read, [...lean, "--effort", "low", ...CLAUDE_HEADLESS, "-p", prompt]);
+    assert.deepEqual(argv.bound.proposal, [...lean, "--model", "opus", "--effort", "medium", ...CLAUDE_HEADLESS, "-p", prompt]);
     assert.deepEqual(argv.codex.day_read, [
       "exec",
       "-c",
@@ -541,6 +554,7 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
       "--sandbox",
       "read-only",
       "--skip-git-repo-check",
+      "--ephemeral",
       prompt,
     ]);
     assert.deepEqual(argv.codex.proposal, [
@@ -550,12 +564,13 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
       "--sandbox",
       "read-only",
       "--skip-git-repo-check",
+      "--ephemeral",
       prompt,
     ]);
     assert.deepEqual(argv.antigravity.day_read, [...AGY_DENY, "--effort", "low", "-p", prompt, "--print-timeout", "5m"]);
     assert.deepEqual(argv.antigravity.proposal, [...AGY_DENY, "--effort", "medium", "-p", prompt, "--print-timeout", "5m"]);
-    assert.deepEqual(argv.grok.day_read, ["--reasoning-effort", "low", "-p", prompt]);
-    assert.deepEqual(argv.grok.proposal, ["--reasoning-effort", "medium", "-p", prompt]);
+    assert.deepEqual(argv.grok.day_read, [...grokLean, "--reasoning-effort", "low", "-p", prompt]);
+    assert.deepEqual(argv.grok.proposal, [...grokLean, "--reasoning-effort", "medium", "-p", prompt]);
   }));
 
 test("runChosenStreaming and coach-read turns preserve model/reasoning metadata", async () => {
